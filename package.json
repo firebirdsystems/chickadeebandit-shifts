@@ -1,0 +1,16 @@
+{
+  "name": "chickadee-app-shifts",
+  "version": "1.0.0",
+  "description": "Shift Scheduler app for Chickadee Bandit",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "node dev.mjs"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  },
+  "license": "MIT"
+}

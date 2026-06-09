@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base href="/run/shifts/" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shift Scheduler</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           var(--hub-bg, #f9fafb);
+      --card:         var(--hub-surface, #ffffff);
+      --border:       var(--hub-border, #e5e7eb);
+      --text:         var(--hub-text, #111827);
+      --muted:        var(--hub-text-muted, #6b7280);
+      --accent:       var(--hub-primary, #111827);
+      --accent-fg:    var(--hub-primary-fg, #ffffff);
+      --accent-hover: var(--hub-primary-hover, #374151);
+      --accent-light: #f3f4f6;
+      --radius:       var(--hub-radius, 0.5rem);
+      --shadow:       0 1px 3px rgba(0,0,0,.07);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: var(--hub-font-size, 15px);
+      line-height: 1.5;
+    }
+
+    .app { max-width: 760px; margin: 0 auto; padding: 16px; }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding: 16px 20px;
+      background: var(--accent);
+      border-radius: var(--radius);
+      color: var(--accent-fg);
+    }
+    header h1 { font-size: 1.2rem; font-weight: 700; }
+    header .subtitle { font-size: 0.8rem; opacity: .75; margin-top: 2px; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: opacity .15s, background .15s;
+      white-space: nowrap;
+    }
+    .btn:disabled { opacity: .5; cursor: default; }
+    .btn-primary { background: var(--accent); color: var(--accent-fg); }
+    .btn-primary:hover:not(:disabled) { opacity: .88; }
+    .btn-ghost { background: transparent; color: var(--muted); border: 1.5px solid var(--border); }
+    .btn-ghost:hover { border-color: var(--text); color: var(--text); }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-sm { padding: 5px 12px; font-size: 0.8rem; }
+    .btn-icon { background: transparent; border: none; color: inherit; padding: 4px 6px; cursor: pointer; font-size: 1rem; border-radius: 6px; }
+    .btn-icon:hover { background: rgba(0,0,0,.06); }
+    .header-light .btn-ghost { color: var(--accent-fg); border-color: rgba(255,255,255,.4); }
+    .header-light .btn-ghost:hover { border-color: var(--accent-fg); }
+
+    /* ── Toolbar ──────────────────────────────────────────── */
+    .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+    .tabs { display: flex; gap: 4px; background: var(--accent-light); border-radius: 10px; padding: 4px; }
+    .tab { padding: 6px 14px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; color: var(--muted); border: none; background: transparent; }
+    .tab.active { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+    .week-nav { display: flex; align-items: center; gap: 8px; }
+    .week-nav .week-label { font-size: 0.9rem; font-weight: 600; min-width: 150px; text-align: center; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    /* ── Week grid ────────────────────────────────────────── */
+    .grid-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
+    .week-grid { display: grid; grid-template-columns: 130px repeat(7, minmax(96px, 1fr)); min-width: 800px; }
+    .grid-cell { border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); padding: 8px; min-height: 64px; }
+    .week-grid .grid-cell:nth-child(8n) { border-right: none; }
+    .grid-head { font-size: 0.75rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; padding: 10px 8px; background: var(--accent-light); position: sticky; top: 0; }
+    .grid-head.today { color: var(--accent); }
+    .grid-head .day-num { font-size: 1.1rem; color: var(--text); font-weight: 700; text-transform: none; letter-spacing: 0; }
+    .grid-head.today .day-num { color: var(--accent); }
+    .type-cell { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.85rem; background: var(--accent-light); }
+    .type-swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+    .type-cell .type-actions { margin-left: auto; display: flex; opacity: 0; transition: opacity .1s; }
+    .type-cell:hover .type-actions { opacity: 1; }
+    .today-col { background: var(--accent-light); }
+
+    .shift-pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 8px; border-radius: 8px; cursor: pointer;
+      font-size: 0.8rem; font-weight: 600; color: var(--text);
+      border: 1px solid transparent;
+      transition: border-color .1s;
+    }
+    .shift-pill:hover { border-color: var(--border); }
+    .shift-pill.unassigned { color: var(--muted); font-weight: 500; font-style: italic; border: 1px dashed var(--border); justify-content: center; }
+    .shift-pill .avatar { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 0.7rem; font-weight: 700; flex-shrink: 0; }
+    .empty-cell { display: flex; align-items: center; justify-content: center; height: 100%; min-height: 32px; color: var(--border); cursor: pointer; border-radius: 8px; border: 1px dashed transparent; font-size: 1.1rem; }
+    .empty-cell:hover { border-color: var(--border); color: var(--muted); }
+
+    /* ── My shifts list ───────────────────────────────────── */
+    .shift-card { display: flex; align-items: center; gap: 14px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; margin-bottom: 10px; }
+    .shift-card .date-block { width: 56px; text-align: center; flex-shrink: 0; }
+    .shift-card .date-block .rel { font-size: 0.75rem; font-weight: 700; color: var(--accent); text-transform: uppercase; }
+    .shift-card .date-block .num { font-size: 1.4rem; font-weight: 800; }
+    .shift-card .emoji { font-size: 1.5rem; flex-shrink: 0; }
+    .shift-card .info { flex: 1; min-width: 0; }
+    .shift-card .info .name { font-weight: 700; }
+    .shift-card .info .note { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    .shift-card .who { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); flex-shrink: 0; }
+    .shift-card .who .avatar { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 0.75rem; font-weight: 700; }
+
+    .empty-state { text-align: center; padding: 48px 16px; color: var(--muted); }
+    .empty-state .icon { font-size: 2.5rem; margin-bottom: 10px; }
+
+    /* ── Modal ────────────────────────────────────────────── */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px; }
+    .modal { background: var(--card); border-radius: var(--radius); padding: 20px; width: 100%; max-width: 440px; max-height: 90vh; overflow-y: auto; }
+    .modal h2 { font-size: 1.1rem; margin-bottom: 4px; }
+    .modal .modal-sub { font-size: 0.85rem; color: var(--muted); margin-bottom: 16px; }
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 6px; color: var(--muted); }
+    .field input[type=text], .field input[type=date], .field select, .field textarea {
+      width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px;
+      font-size: 0.9rem; font-family: inherit; background: var(--bg); color: var(--text);
+    }
+    .field-row { display: flex; gap: 10px; }
+    .field-row .field { flex: 1; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+    .swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+    .swatch { width: 28px; height: 28px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
+    .swatch.selected { border-color: var(--text); }
+    .emoji-picker { display: flex; gap: 6px; flex-wrap: wrap; }
+    .emoji-opt { font-size: 1.3rem; padding: 6px 8px; border-radius: 8px; cursor: pointer; border: 1px solid var(--border); background: var(--bg); }
+    .emoji-opt.selected { border-color: var(--accent); background: var(--accent-light); }
+
+    .member-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+    .member-opt {
+      display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+      border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 0.9rem;
+    }
+    .member-opt:hover { border-color: var(--accent); }
+    .member-opt.selected { border-color: var(--accent); background: var(--accent-light); font-weight: 600; }
+    .member-opt .avatar { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 0.8rem; font-weight: 700; flex-shrink: 0; }
+    .member-opt .role-badge { margin-left: auto; font-size: 0.7rem; color: var(--muted); text-transform: uppercase; }
+    .checkbox-row { display: flex; align-items: center; gap: 8px; }
+    .checkbox-row input { width: 16px; height: 16px; }
+
+    .preview-list { border: 1px solid var(--border); border-radius: 8px; max-height: 180px; overflow-y: auto; margin-top: 4px; }
+    .preview-row { display: flex; justify-content: space-between; padding: 6px 10px; font-size: 0.82rem; border-bottom: 1px solid var(--border); }
+    .preview-row:last-child { border-bottom: none; }
+    .preview-row .who { color: var(--muted); }
+
+    #status { margin-top: 12px; font-size: 0.85rem; color: var(--muted); text-align: center; }
+
+    @media (max-width: 480px) {
+      header { padding: 14px 16px; }
+      .toolbar { flex-direction: column; align-items: stretch; }
+      .actions { justify-content: stretch; }
+      .actions .btn { flex: 1; justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header id="header">
+      <div>
+        <h1>📅 Shift Scheduler</h1>
+        <div class="subtitle" id="header-subtitle">Loading…</div>
+      </div>
+      <div class="actions" id="header-actions"></div>
+    </header>
+
+    <div class="toolbar">
+      <div class="tabs" id="view-tabs"></div>
+      <div class="week-nav" id="week-nav"></div>
+    </div>
+
+    <div id="content"></div>
+    <p id="status"></p>
+  </div>
+
+  <script type="module">
+    import { esc, memberColor, initial, hubConfirm, createDbHelper } from "/hub-sdk.js";
+    import {
+      isAdult, canManage, addDays, isoWeekStart, daysInRange,
+      weekdayLabel, monthDayLabel, relativeDay, generateRotation,
+      groupByDate, toISODate,
+    } from "./logic.js";
+
+    const CONTEXT = window.__CONTEXT_URL ?? "";
+    const DB      = window.__DB_URL      ?? "";
+    const APP_ID  = window.__APP_ID      ?? "shifts";
+    const ME      = window.__CURRENT_MEMBER ?? null;
+
+    const db = createDbHelper(DB);
+
+    const PALETTE = ["#6366f1", "#0891b2", "#059669", "#d97706", "#dc2626", "#7c3aed", "#db2777", "#65a30d"];
+    const EMOJIS = ["🍳", "🧹", "🛡️", "📋", "🚪", "🗑️", "🧺", "🌱", "🔧", "📞", "🔄"];
+
+    let members   = [];
+    let memberMap = new Map();
+    let shiftTypes = [];
+    let shifts = []; // currently visible week's shifts
+    const weekCache = new Map();
+
+    const todayIso = toISODate(new Date());
+    let weekStart = isoWeekStart(todayIso);
+    let view = null; // set after members load
+    let modalEl = null;
+
+    // ── Data loading ─────────────────────────────────────────────────────────
+
+    async function loadMembers() {
+      if (!CONTEXT) {
+        members = [
+          { id: "demo-leader", name: "Sam", role: "adult" },
+          { id: "demo-member-1", name: "Jordan", role: "adult" },
+          { id: "demo-member-2", name: "Riley", role: "child" },
+        ];
+        memberMap = new Map(members.map(m => [m.id, m]));
+        return;
+      }
+      try {
+        const res = await fetch(`${CONTEXT}?keys=family.members`);
+        members = ((await res.json())["family.members"]) ?? [];
+      } catch { members = []; }
+      memberMap = new Map(members.map(m => [m.id, m]));
+    }
+
+    async function loadShiftTypes() {
+      if (!DB) {
+        shiftTypes = [
+          { id: "demo-cook", name: "Cook Night", emoji: "🍳", color: "#d97706", sort_order: 0 },
+          { id: "demo-clean", name: "House Cleaning", emoji: "🧹", color: "#0891b2", sort_order: 1 },
+          { id: "demo-desk", name: "Front Desk", emoji: "📋", color: "#6366f1", sort_order: 2 },
+        ];
+        return;
+      }
+      const { rows } = await db(`SELECT id, name, emoji, color, sort_order FROM shift_types ORDER BY sort_order ASC, created_at ASC`);
+      shiftTypes = rows ?? [];
+    }
+
+    async function loadShiftsForWeek(start) {
+      if (weekCache.has(start)) {
+        shifts = weekCache.get(start);
+        return;
+      }
+      const end = addDays(start, 6);
+      if (!DB) {
+        shifts = demoShiftsForWeek(start, end);
+        weekCache.set(start, shifts);
+        return;
+      }
+      const { rows } = await db(
+        `SELECT id, shift_type_id, date, member_id, note FROM shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
+        [start, end]
+      );
+      shifts = rows ?? [];
+      weekCache.set(start, shifts);
+    }
+
+    function demoShiftsForWeek(start, end) {
+      if (!shiftTypes.length || !members.length) return [];
+      const days = daysInRange(start, end);
+      const out = [];
+      shiftTypes.forEach((t, ti) => {
+        days.forEach((date, di) => {
+          if ((di + ti) % 3 === 0) return; // sparse demo data
+          out.push({
+            id: `demo-${t.id}-${date}`,
+            shift_type_id: t.id,
+            date,
+            member_id: members[(di + ti) % members.length].id,
+            note: "",
+          });
+        });
+      });
+      return out;
+    }
+
+    async function loadMyShifts() {
+      if (!ME) return [];
+      if (!DB) {
+        const all = [];
+        for (const w of [weekStart, addDays(weekStart, 7), addDays(weekStart, 14)]) {
+          if (!weekCache.has(w)) weekCache.set(w, demoShiftsForWeek(w, addDays(w, 6)));
+          all.push(...weekCache.get(w));
+        }
+        return all.filter(s => s.member_id === ME.id && s.date >= todayIso)
+          .sort((a, b) => a.date.localeCompare(b.date));
+      }
+      const { rows } = await db(
+        `SELECT id, shift_type_id, date, member_id, note FROM shifts WHERE member_id = ? AND date >= ? ORDER BY date ASC LIMIT 50`,
+        [ME.id, todayIso]
+      );
+      return rows ?? [];
+    }
+
+    // ── Side effects ─────────────────────────────────────────────────────────
+
+    async function logActivity(shiftId, action, detail = "") {
+      if (!DB) return;
+      const id = crypto.randomUUID();
+      await db(
+        `INSERT INTO activity (id, shift_id, actor_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        [id, shiftId, ME?.id ?? "system", action, detail, new Date().toISOString()]
+      ).catch(() => {});
+    }
+
+    async function notify(title, body) {
+      await fetch("/api/notifications/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, body, url: `/run/${APP_ID}` }),
+      }).catch(() => {});
+    }
+
+    async function logHubActivity(type, description, deepLinkParams) {
+      await fetch("/api/activity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type, description,
+          metadata: { deepLink: { appId: APP_ID, params: deepLinkParams } },
+        }),
+      }).catch(() => {});
+    }
+
+    // ── Mutations (optimistic) ──────────────────────────────────────────────
+
+    async function createShiftType(fields) {
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const sortOrder = shiftTypes.length;
+
+      if (DB) {
+        await db(
+          `INSERT INTO shift_types (id, name, emoji, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          [id, fields.name, fields.emoji, fields.color, sortOrder, now]
+        );
+      }
+
+      shiftTypes = [...shiftTypes, { id, name: fields.name, emoji: fields.emoji, color: fields.color, sort_order: sortOrder }];
+      closeModal();
+      render();
+    }
+
+    async function updateShiftType(id, fields) {
+      if (DB) {
+        await db(`UPDATE shift_types SET name = ?, emoji = ?, color = ? WHERE id = ?`, [fields.name, fields.emoji, fields.color, id]);
+      }
+      const idx = shiftTypes.findIndex(t => t.id === id);
+      if (idx !== -1) shiftTypes[idx] = { ...shiftTypes[idx], ...fields };
+      closeModal();
+      render();
+    }
+
+    async function deleteShiftType(id) {
+      const ok = await hubConfirm({
+        message: "Delete this duty?",
+        description: "All scheduled shifts for this duty will also be removed.",
+        confirmLabel: "Delete",
+        destructive: true,
+      });
+      if (!ok) return;
+
+      if (DB) {
+        await db(`DELETE FROM shifts WHERE shift_type_id = ?`, [id]);
+        await db(`DELETE FROM shift_types WHERE id = ?`, [id]);
+      }
+      shiftTypes = shiftTypes.filter(t => t.id !== id);
+      shifts = shifts.filter(s => s.shift_type_id !== id);
+      for (const cached of weekCache.values()) {
+        // mutate in place isn't possible on cached arrays here since they may be the same ref; rebuild cache
+      }
+      weekCache.clear();
+      weekCache.set(weekStart, shifts);
+      closeModal();
+      render();
+    }
+
+    // Assign (or create+assign) a shift for a given (date, shiftTypeId).
+    async function assignShift(existingShift, shiftTypeId, date, memberId) {
+      const now = new Date().toISOString();
+
+      if (existingShift) {
+        if (DB) await db(`UPDATE shifts SET member_id = ?, updated_at = ? WHERE id = ?`, [memberId, now, existingShift.id]);
+        const idx = shifts.findIndex(s => s.id === existingShift.id);
+        if (idx !== -1) shifts[idx] = { ...shifts[idx], member_id: memberId };
+        closeModal();
+        render();
+        Promise.all([
+          logActivity(existingShift.id, memberId ? "assigned" : "unassigned",
+            memberId ? `${memberMap.get(memberId)?.name ?? "Someone"} assigned` : "Unassigned"),
+          memberId ? notify("New shift assigned", `You're on duty ${date}.`) : Promise.resolve(),
+        ]).catch(() => {});
+        return;
+      }
+
+      const id = crypto.randomUUID();
+      if (DB) {
+        await db(
+          `INSERT INTO shifts (id, shift_type_id, date, member_id, note, created_at, updated_at) VALUES (?, ?, ?, ?, '', ?, ?)`,
+          [id, shiftTypeId, date, memberId, now, now]
+        );
+      }
+      const newShift = { id, shift_type_id: shiftTypeId, date, member_id: memberId, note: "" };
+      shifts = [...shifts, newShift];
+      closeModal();
+      render();
+      Promise.all([
+        logActivity(id, "created", `Shift created for ${date}`),
+        memberId ? notify("New shift assigned", `You're on duty ${date}.`) : Promise.resolve(),
+      ]).catch(() => {});
+    }
+
+    async function deleteShift(shift) {
+      const ok = await hubConfirm({
+        message: "Remove this shift?",
+        confirmLabel: "Remove",
+        destructive: true,
+      });
+      if (!ok) return;
+
+      if (DB) await db(`DELETE FROM shifts WHERE id = ?`, [shift.id]);
+      shifts = shifts.filter(s => s.id !== shift.id);
+      closeModal();
+      render();
+      logActivity(shift.id, "deleted", "Shift removed").catch(() => {});
+    }
+
+    async function bulkCreateShifts(rows, shiftTypeId) {
+      const now = new Date().toISOString();
+      const created = rows.map(r => ({
+        id: crypto.randomUUID(),
+        shift_type_id: shiftTypeId,
+        date: r.date,
+        member_id: r.member_id,
+        note: "",
+      }));
+
+      if (DB) {
+        for (const c of created) {
+          await db(
+            `INSERT INTO shifts (id, shift_type_id, date, member_id, note, created_at, updated_at) VALUES (?, ?, ?, ?, '', ?, ?)`,
+            [c.id, c.shift_type_id, c.date, c.member_id, now, now]
+          ).catch(() => {});
+        }
+      }
+
+      // Merge into local state: replace any cached week that overlaps this range.
+      weekCache.clear();
+      const inCurrentWeek = created.filter(c => c.date >= weekStart && c.date <= addDays(weekStart, 6));
+      shifts = [...shifts, ...inCurrentWeek];
+      weekCache.set(weekStart, shifts);
+
+      closeModal();
+      render();
+
+      Promise.all([
+        logHubActivity("shift_rotation_generated",
+          `${ME?.name ?? "Someone"} generated a rotation (${created.length} shifts)`, {}),
+        notify("New rotation scheduled", `${created.length} shifts have been scheduled.`),
+      ]).catch(() => {});
+    }
+
+    // ── Modals ────────────────────────────────────────────────────────────────
+
+    function openModal(html) {
+      closeModal();
+      modalEl = document.createElement("div");
+      modalEl.className = "modal-backdrop";
+      modalEl.innerHTML = `<div class="modal">${html}</div>`;
+      modalEl.addEventListener("click", e => { if (e.target === modalEl) closeModal(); });
+      document.body.appendChild(modalEl);
+    }
+    function closeModal() { modalEl?.remove(); modalEl = null; }
+
+    function openShiftTypeModal(existing) {
+      const name = existing?.name ?? "";
+      const emoji = existing?.emoji ?? EMOJIS[0];
+      const color = existing?.color ?? PALETTE[0];
+
+      openModal(`
+        <h2>${existing ? "Edit Duty" : "New Duty"}</h2>
+        <div class="modal-sub">A recurring duty that members rotate through (e.g. Cook Night, Front Desk).</div>
+        <div class="field">
+          <label for="f-name">Name</label>
+          <input type="text" id="f-name" value="${esc(name)}" placeholder="e.g. Cook Night" maxlength="60" />
+        </div>
+        <div class="field">
+          <label>Icon</label>
+          <div class="emoji-picker" id="f-emoji">
+            ${EMOJIS.map(e => `<div class="emoji-opt ${e === emoji ? "selected" : ""}" data-emoji="${e}">${e}</div>`).join("")}
+          </div>
+        </div>
+        <div class="field">
+          <label>Color</label>
+          <div class="swatches" id="f-color">
+            ${PALETTE.map(c => `<div class="swatch ${c === color ? "selected" : ""}" data-color="${c}" style="background:${c}"></div>`).join("")}
+          </div>
+        </div>
+        <div class="modal-actions">
+          ${existing ? `<button class="btn btn-danger btn-sm" onclick="window.__deleteShiftType('${existing.id}')">Delete</button>` : ""}
+          <button class="btn btn-ghost" onclick="window.__closeModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="window.__saveShiftType('${existing?.id ?? ""}')">${existing ? "Save" : "Create"}</button>
+        </div>
+      `);
+
+      modalEl.querySelectorAll("#f-emoji .emoji-opt").forEach(el => {
+        el.addEventListener("click", () => {
+          modalEl.querySelectorAll("#f-emoji .emoji-opt").forEach(o => o.classList.remove("selected"));
+          el.classList.add("selected");
+        });
+      });
+      modalEl.querySelectorAll("#f-color .swatch").forEach(el => {
+        el.addEventListener("click", () => {
+          modalEl.querySelectorAll("#f-color .swatch").forEach(o => o.classList.remove("selected"));
+          el.classList.add("selected");
+        });
+      });
+
+      window.__closeModal = closeModal;
+      window.__deleteShiftType = (id) => deleteShiftType(id);
+      window.__saveShiftType = async (id) => {
+        const nameVal = document.getElementById("f-name").value.trim();
+        if (!nameVal) { document.getElementById("f-name").focus(); return; }
+        const emojiVal = modalEl.querySelector("#f-emoji .emoji-opt.selected")?.dataset.emoji ?? EMOJIS[0];
+        const colorVal = modalEl.querySelector("#f-color .swatch.selected")?.dataset.color ?? PALETTE[0];
+
+        const btn = modalEl.querySelector(".modal-actions .btn-primary");
+        if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+
+        try {
+          if (id) await updateShiftType(id, { name: nameVal, emoji: emojiVal, color: colorVal });
+          else await createShiftType({ name: nameVal, emoji: emojiVal, color: colorVal });
+        } catch (e) {
+          if (btn) { btn.disabled = false; btn.textContent = id ? "Save" : "Create"; }
+          document.getElementById("status").textContent = `Error: ${e.message}`;
+        }
+      };
+    }
+
+    function openAssignModal(shiftTypeId, date, existingShift) {
+      const type = shiftTypes.find(t => t.id === shiftTypeId);
+      const currentMemberId = existingShift?.member_id ?? null;
+
+      openModal(`
+        <h2>${type?.emoji ?? ""} ${esc(type?.name ?? "Shift")}</h2>
+        <div class="modal-sub">${weekdayLabel(date)}, ${monthDayLabel(date)} — choose who's on duty</div>
+        <div class="member-list" id="f-members">
+          <div class="member-opt ${currentMemberId === null ? "selected" : ""}" data-member="">
+            <div class="avatar" style="background:#9ca3af">—</div>
+            <span>Unassigned</span>
+          </div>
+          ${members.map(m => `
+            <div class="member-opt ${m.id === currentMemberId ? "selected" : ""}" data-member="${m.id}">
+              <div class="avatar" style="background:${memberColor(m.id)}">${initial(m.name)}</div>
+              <span>${esc(m.name)}</span>
+              <span class="role-badge">${esc(m.role)}</span>
+            </div>
+          `).join("")}
+        </div>
+        <div class="modal-actions">
+          ${existingShift ? `<button class="btn btn-danger btn-sm" onclick="window.__deleteShift()">Remove shift</button>` : ""}
+          <button class="btn btn-ghost" onclick="window.__closeModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="window.__saveAssign()">Save</button>
+        </div>
+      `);
+
+      let selectedMember = currentMemberId;
+      modalEl.querySelectorAll("#f-members .member-opt").forEach(el => {
+        el.addEventListener("click", () => {
+          modalEl.querySelectorAll("#f-members .member-opt").forEach(o => o.classList.remove("selected"));
+          el.classList.add("selected");
+          selectedMember = el.dataset.member || null;
+        });
+      });
+
+      window.__closeModal = closeModal;
+      window.__deleteShift = () => deleteShift(existingShift);
+      window.__saveAssign = async () => {
+        const btn = modalEl.querySelector(".modal-actions .btn-primary");
+        if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+        try {
+          await assignShift(existingShift, shiftTypeId, date, selectedMember);
+        } catch (e) {
+          if (btn) { btn.disabled = false; btn.textContent = "Save"; }
+          document.getElementById("status").textContent = `Error: ${e.message}`;
+        }
+      };
+    }
+
+    function openRotationModal() {
+      if (shiftTypes.length === 0) {
+        openModal(`
+          <h2>Generate Rotation</h2>
+          <div class="modal-sub">Create a duty first, then generate a rotation for it.</div>
+          <div class="modal-actions"><button class="btn btn-primary" onclick="window.__closeModal()">OK</button></div>
+        `);
+        window.__closeModal = closeModal;
+        return;
+      }
+
+      const start = weekStart;
+      const end = addDays(weekStart, 6);
+      const eligibleMembers = members; // kids may be assigned per product decision
+
+      openModal(`
+        <h2>Generate Rotation</h2>
+        <div class="modal-sub">Auto-fill a duty across a date range, rotating through selected members.</div>
+        <div class="field">
+          <label for="f-type">Duty</label>
+          <select id="f-type">
+            ${shiftTypes.map(t => `<option value="${t.id}">${t.emoji} ${esc(t.name)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="f-start">Start date</label>
+            <input type="date" id="f-start" value="${start}" />
+          </div>
+          <div class="field">
+            <label for="f-end">End date</label>
+            <input type="date" id="f-end" value="${end}" />
+          </div>
+        </div>
+        <div class="field">
+          <label>Rotate through</label>
+          <div class="member-list" id="f-rot-members">
+            ${eligibleMembers.map(m => `
+              <label class="member-opt selected" data-member="${m.id}">
+                <input type="checkbox" checked style="margin-right:4px" />
+                <div class="avatar" style="background:${memberColor(m.id)}">${initial(m.name)}</div>
+                <span>${esc(m.name)}</span>
+                <span class="role-badge">${esc(m.role)}</span>
+              </label>
+            `).join("")}
+          </div>
+        </div>
+        <div class="field">
+          <label for="f-style">Pattern</label>
+          <select id="f-style">
+            <option value="round-robin">Round robin (rotates daily)</option>
+            <option value="weekday">Same person each weekday (e.g. Alice always Mondays)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Preview</label>
+          <div class="preview-list" id="f-preview"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" onclick="window.__closeModal()">Cancel</button>
+          <button class="btn btn-primary" id="f-confirm" disabled>Schedule</button>
+        </div>
+      `);
+
+      modalEl.querySelectorAll("#f-rot-members .member-opt").forEach(el => {
+        el.addEventListener("click", (e) => {
+          if (e.target.tagName === "INPUT") return; // checkbox toggles itself
+          const cb = el.querySelector("input");
+          cb.checked = !cb.checked;
+          el.classList.toggle("selected", cb.checked);
+          updatePreview();
+        });
+        el.querySelector("input").addEventListener("change", () => {
+          el.classList.toggle("selected", el.querySelector("input").checked);
+          updatePreview();
+        });
+      });
+
+      ["f-type", "f-start", "f-end", "f-style"].forEach(id => {
+        document.getElementById(id).addEventListener("change", updatePreview);
+      });
+
+      function selectedMemberIds() {
+        return [...modalEl.querySelectorAll("#f-rot-members .member-opt")]
+          .filter(el => el.querySelector("input").checked)
+          .map(el => el.dataset.member);
+      }
+
+      function updatePreview() {
+        const startVal = document.getElementById("f-start").value;
+        const endVal = document.getElementById("f-end").value;
+        const styleVal = document.getElementById("f-style").value;
+        const memberIds = selectedMemberIds();
+        const confirmBtn = document.getElementById("f-confirm");
+        const previewEl = document.getElementById("f-preview");
+
+        if (!startVal || !endVal || startVal > endVal || memberIds.length === 0) {
+          previewEl.innerHTML = `<div class="preview-row"><span>Select a valid date range and at least one member.</span></div>`;
+          confirmBtn.disabled = true;
+          return;
+        }
+
+        const rotation = generateRotation(startVal, endVal, memberIds, styleVal);
+        previewEl.innerHTML = rotation.map(r => `
+          <div class="preview-row">
+            <span>${weekdayLabel(r.date)} ${monthDayLabel(r.date)}</span>
+            <span class="who">${esc(memberMap.get(r.member_id)?.name ?? "—")}</span>
+          </div>
+        `).join("");
+        confirmBtn.disabled = false;
+      }
+
+      updatePreview();
+
+      window.__closeModal = closeModal;
+      document.getElementById("f-confirm").addEventListener("click", async () => {
+        const startVal = document.getElementById("f-start").value;
+        const endVal = document.getElementById("f-end").value;
+        const styleVal = document.getElementById("f-style").value;
+        const typeId = document.getElementById("f-type").value;
+        const memberIds = selectedMemberIds();
+        const rotation = generateRotation(startVal, endVal, memberIds, styleVal);
+
+        const btn = document.getElementById("f-confirm");
+        btn.disabled = true; btn.textContent = "Scheduling…";
+        try {
+          await bulkCreateShifts(rotation, typeId);
+        } catch (e) {
+          btn.disabled = false; btn.textContent = "Schedule";
+          document.getElementById("status").textContent = `Error: ${e.message}`;
+        }
+      });
+    }
+
+    // ── Rendering ────────────────────────────────────────────────────────────
+
+    function memberAvatar(memberId, size = 20) {
+      const m = memberMap.get(memberId);
+      if (!m) return `<div class="avatar" style="background:#9ca3af;width:${size}px;height:${size}px">—</div>`;
+      return `<div class="avatar" style="background:${memberColor(m.id)};width:${size}px;height:${size}px">${initial(m.name)}</div>`;
+    }
+
+    function renderHeader() {
+      const leader = canManage(ME);
+      document.getElementById("header-subtitle").textContent = leader
+        ? "Leadership view — manage duties & assignments"
+        : ME ? `Welcome, ${ME.name}` : "Demo mode";
+
+      const actions = document.getElementById("header-actions");
+      if (leader) {
+        actions.innerHTML = `
+          <button class="btn btn-ghost" id="btn-new-duty">+ Duty</button>
+          <button class="btn btn-primary" id="btn-rotation">Generate Rotation</button>
+        `;
+        document.getElementById("btn-new-duty").addEventListener("click", () => openShiftTypeModal(null));
+        document.getElementById("btn-rotation").addEventListener("click", openRotationModal);
+      } else {
+        actions.innerHTML = "";
+      }
+    }
+
+    function renderTabs() {
+      const tabs = document.getElementById("view-tabs");
+      tabs.innerHTML = `
+        <button class="tab ${view === "week" ? "active" : ""}" data-view="week">Week View</button>
+        <button class="tab ${view === "mine" ? "active" : ""}" data-view="mine">My Shifts</button>
+      `;
+      tabs.querySelectorAll(".tab").forEach(el => {
+        el.addEventListener("click", async () => {
+          view = el.dataset.view;
+          await renderContent();
+          renderTabs();
+          renderWeekNav();
+        });
+      });
+    }
+
+    function renderWeekNav() {
+      const nav = document.getElementById("week-nav");
+      if (view !== "week") { nav.innerHTML = ""; return; }
+      const end = addDays(weekStart, 6);
+      const label = `${monthDayLabel(weekStart)} – ${monthDayLabel(end)}`;
+      nav.innerHTML = `
+        <button class="btn btn-ghost btn-sm" id="nav-prev">←</button>
+        <span class="week-label">${label}</span>
+        <button class="btn btn-ghost btn-sm" id="nav-today">Today</button>
+        <button class="btn btn-ghost btn-sm" id="nav-next">→</button>
+      `;
+      document.getElementById("nav-prev").addEventListener("click", () => changeWeek(-7));
+      document.getElementById("nav-next").addEventListener("click", () => changeWeek(7));
+      document.getElementById("nav-today").addEventListener("click", () => changeWeek(0, true));
+    }
+
+    async function changeWeek(deltaDays, jumpToToday = false) {
+      weekStart = jumpToToday ? isoWeekStart(todayIso) : addDays(weekStart, deltaDays);
+      await loadShiftsForWeek(weekStart);
+      renderWeekNav();
+      await renderContent();
+    }
+
+    async function renderContent() {
+      const content = document.getElementById("content");
+      if (view === "week") {
+        content.innerHTML = renderWeekGrid();
+        attachWeekGridHandlers();
+      } else {
+        const myShifts = await loadMyShifts();
+        content.innerHTML = renderMyShifts(myShifts);
+      }
+    }
+
+    function renderWeekGrid() {
+      const leader = canManage(ME);
+      const days = daysInRange(weekStart, addDays(weekStart, 6));
+      const byDate = groupByDate(shifts);
+
+      if (shiftTypes.length === 0) {
+        return `
+          <div class="empty-state">
+            <div class="icon">📅</div>
+            <p>No duties set up yet.</p>
+            ${leader ? `<p style="margin-top:6px;font-size:0.85rem;">Tap "+ Duty" above to create your first recurring duty.</p>` : ""}
+          </div>
+        `;
+      }
+
+      let html = `<div class="grid-wrap"><div class="week-grid">`;
+      html += `<div class="grid-cell grid-head"></div>`;
+      for (const d of days) {
+        const isToday = d === todayIso;
+        html += `<div class="grid-cell grid-head ${isToday ? "today" : ""} ${isToday ? "today-col" : ""}">
+          ${weekdayLabel(d)}<br/><span class="day-num">${monthDayLabel(d).split(" ")[1]}</span>
+        </div>`;
+      }
+
+      for (const t of shiftTypes) {
+        html += `<div class="grid-cell type-cell">
+          <span class="type-swatch" style="background:${t.color}"></span>
+          <span>${t.emoji} ${esc(t.name)}</span>
+          ${leader ? `<span class="type-actions"><button class="btn-icon" data-edit-type="${t.id}" title="Edit">✏️</button></span>` : ""}
+        </div>`;
+
+        for (const d of days) {
+          const isToday = d === todayIso;
+          const shift = (byDate.get(d) ?? []).find(s => s.shift_type_id === t.id);
+          html += `<div class="grid-cell ${isToday ? "today-col" : ""}">`;
+          if (shift) {
+            if (shift.member_id) {
+              const m = memberMap.get(shift.member_id);
+              html += `<div class="shift-pill" data-cell-type="${t.id}" data-cell-date="${d}" data-shift-id="${shift.id}">
+                ${memberAvatar(shift.member_id)}
+                <span>${esc(m?.name ?? "Unknown")}</span>
+              </div>`;
+            } else {
+              html += `<div class="shift-pill unassigned" data-cell-type="${t.id}" data-cell-date="${d}" data-shift-id="${shift.id}">Unassigned</div>`;
+            }
+          } else if (leader) {
+            html += `<div class="empty-cell" data-cell-type="${t.id}" data-cell-date="${d}">+</div>`;
+          } else {
+            html += `<div class="empty-cell" style="cursor:default;border:none;">·</div>`;
+          }
+          html += `</div>`;
+        }
+      }
+      html += `</div></div>`;
+      return html;
+    }
+
+    function attachWeekGridHandlers() {
+      const leader = canManage(ME);
+      document.querySelectorAll("[data-edit-type]").forEach(el => {
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const t = shiftTypes.find(t => t.id === el.dataset.editType);
+          openShiftTypeModal(t);
+        });
+      });
+      if (!leader) return;
+      document.querySelectorAll("[data-cell-type][data-cell-date]").forEach(el => {
+        el.addEventListener("click", () => {
+          const shiftTypeId = el.dataset.cellType;
+          const date = el.dataset.cellDate;
+          const shiftId = el.dataset.shiftId;
+          const existing = shiftId ? shifts.find(s => s.id === shiftId) : null;
+          openAssignModal(shiftTypeId, date, existing ?? null);
+        });
+      });
+    }
+
+    function renderMyShifts(myShifts) {
+      if (!ME) {
+        return `<div class="empty-state"><div class="icon">👤</div><p>Sign in to see your shifts.</p></div>`;
+      }
+      if (myShifts.length === 0) {
+        return `<div class="empty-state"><div class="icon">✅</div><p>No upcoming shifts assigned to you.</p></div>`;
+      }
+      return myShifts.map(s => {
+        const t = shiftTypes.find(t => t.id === s.shift_type_id);
+        const rel = relativeDay(s.date, todayIso);
+        const isRelLabel = rel === "Today" || rel === "Tomorrow";
+        return `
+          <div class="shift-card">
+            <div class="date-block">
+              <div class="rel">${isRelLabel ? rel : weekdayLabel(s.date)}</div>
+              <div class="num">${monthDayLabel(s.date).split(" ")[1]}</div>
+            </div>
+            <div class="emoji">${t?.emoji ?? "🔄"}</div>
+            <div class="info">
+              <div class="name">${esc(t?.name ?? "Shift")}</div>
+              ${s.note ? `<div class="note">${esc(s.note)}</div>` : ""}
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function render() {
+      renderHeader();
+      renderTabs();
+      renderWeekNav();
+      await renderContent();
+    }
+
+    // ── Init ─────────────────────────────────────────────────────────────────
+
+    (async () => {
+      await Promise.all([loadMembers(), loadShiftTypes()]);
+      await loadShiftsForWeek(weekStart);
+      view = canManage(ME) ? "week" : "mine";
+      await render();
+    })();
+  </script>
+</body>
+</html>
