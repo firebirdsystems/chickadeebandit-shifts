@@ -273,6 +273,21 @@
       weekCache.set(start, shifts);
     }
 
+    // Warm the cache for the adjacent weeks so navigating forward/back feels instant.
+    function prefetchAdjacentWeeks(start) {
+      if (!DB) return;
+      for (const w of [addDays(start, -7), addDays(start, 7)]) {
+        if (weekCache.has(w)) continue;
+        const end = addDays(w, 6);
+        db(
+          `SELECT id, shift_type_id, date, member_id, note FROM shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
+          [w, end]
+        ).then(({ rows }) => {
+          if (!weekCache.has(w)) weekCache.set(w, rows ?? []);
+        }).catch(() => {});
+      }
+    }
+
     function demoShiftsForWeek(start, end) {
       if (!shiftTypes.length || !members.length) return [];
       const days = daysInRange(start, end);
@@ -292,22 +307,31 @@
       return out;
     }
 
+    let myShiftsCache = null;
+
+    // Mutations that touch shifts must call this so "My Shifts" reflects them.
+    function invalidateMyShiftsCache() { myShiftsCache = null; }
+
     async function loadMyShifts() {
       if (!ME) return [];
+      if (myShiftsCache) return myShiftsCache;
+
       if (!DB) {
         const all = [];
         for (const w of [weekStart, addDays(weekStart, 7), addDays(weekStart, 14)]) {
           if (!weekCache.has(w)) weekCache.set(w, demoShiftsForWeek(w, addDays(w, 6)));
           all.push(...weekCache.get(w));
         }
-        return all.filter(s => s.member_id === ME.id && s.date >= todayIso)
+        myShiftsCache = all.filter(s => s.member_id === ME.id && s.date >= todayIso)
           .sort((a, b) => a.date.localeCompare(b.date));
+        return myShiftsCache;
       }
       const { rows } = await db(
         `SELECT id, shift_type_id, date, member_id, note FROM shifts WHERE member_id = ? AND date >= ? ORDER BY date ASC LIMIT 50`,
         [ME.id, todayIso]
       );
-      return rows ?? [];
+      myShiftsCache = rows ?? [];
+      return myShiftsCache;
     }
 
     // ── Side effects ─────────────────────────────────────────────────────────
@@ -389,8 +413,10 @@
       }
       weekCache.clear();
       weekCache.set(weekStart, shifts);
+      invalidateMyShiftsCache();
       closeModal();
       render();
+      prefetchAdjacentWeeks(weekStart);
     }
 
     // Assign (or create+assign) a shift for a given (date, shiftTypeId).
@@ -401,6 +427,7 @@
         if (DB) await db(`UPDATE shifts SET member_id = ?, updated_at = ? WHERE id = ?`, [memberId, now, existingShift.id]);
         const idx = shifts.findIndex(s => s.id === existingShift.id);
         if (idx !== -1) shifts[idx] = { ...shifts[idx], member_id: memberId };
+        invalidateMyShiftsCache();
         closeModal();
         render();
         Promise.all([
@@ -420,6 +447,7 @@
       }
       const newShift = { id, shift_type_id: shiftTypeId, date, member_id: memberId, note: "" };
       shifts = [...shifts, newShift];
+      invalidateMyShiftsCache();
       closeModal();
       render();
       Promise.all([
@@ -438,6 +466,7 @@
 
       if (DB) await db(`DELETE FROM shifts WHERE id = ?`, [shift.id]);
       shifts = shifts.filter(s => s.id !== shift.id);
+      invalidateMyShiftsCache();
       closeModal();
       render();
       logActivity(shift.id, "deleted", "Shift removed").catch(() => {});
@@ -453,13 +482,13 @@
         note: "",
       }));
 
-      if (DB) {
-        for (const c of created) {
-          await db(
-            `INSERT INTO shifts (id, shift_type_id, date, member_id, note, created_at, updated_at) VALUES (?, ?, ?, ?, '', ?, ?)`,
-            [c.id, c.shift_type_id, c.date, c.member_id, now, now]
-          ).catch(() => {});
-        }
+      if (DB && created.length > 0) {
+        const placeholders = created.map(() => "(?, ?, ?, ?, '', ?, ?)").join(", ");
+        const params = created.flatMap(c => [c.id, c.shift_type_id, c.date, c.member_id, now, now]);
+        await db(
+          `INSERT INTO shifts (id, shift_type_id, date, member_id, note, created_at, updated_at) VALUES ${placeholders}`,
+          params
+        ).catch(() => {});
       }
 
       // Merge into local state: replace any cached week that overlaps this range.
@@ -467,9 +496,11 @@
       const inCurrentWeek = created.filter(c => c.date >= weekStart && c.date <= addDays(weekStart, 6));
       shifts = [...shifts, ...inCurrentWeek];
       weekCache.set(weekStart, shifts);
+      invalidateMyShiftsCache();
 
       closeModal();
       render();
+      prefetchAdjacentWeeks(weekStart);
 
       Promise.all([
         logHubActivity("shift_rotation_generated",
@@ -803,6 +834,7 @@
       await loadShiftsForWeek(weekStart);
       renderWeekNav();
       await renderContent();
+      prefetchAdjacentWeeks(weekStart);
     }
 
     async function renderContent() {
@@ -935,6 +967,7 @@
       await loadShiftsForWeek(weekStart);
       view = canManage(ME) ? "week" : "mine";
       await render();
+      prefetchAdjacentWeeks(weekStart);
     })();
   </script>
 </body>
