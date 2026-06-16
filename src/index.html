@@ -250,7 +250,7 @@
         ];
         return;
       }
-      const { rows } = await db(`SELECT id, name, emoji, color, sort_order FROM shift_types ORDER BY sort_order ASC, created_at ASC`);
+      const { rows } = await db(`SELECT id, name, emoji, color, sort_order FROM app_shifts__shift_types ORDER BY sort_order ASC, created_at ASC`);
       shiftTypes = rows ?? [];
     }
 
@@ -266,7 +266,7 @@
         return;
       }
       const { rows } = await db(
-        `SELECT id, shift_type_id, date, member_id, note FROM shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
+        `SELECT id, shift_type_id, date, member_id, note FROM app_shifts__shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
         [start, end]
       );
       shifts = rows ?? [];
@@ -280,7 +280,7 @@
         if (weekCache.has(w)) continue;
         const end = addDays(w, 6);
         db(
-          `SELECT id, shift_type_id, date, member_id, note FROM shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
+          `SELECT id, shift_type_id, date, member_id, note FROM app_shifts__shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
           [w, end]
         ).then(({ rows }) => {
           if (!weekCache.has(w)) weekCache.set(w, rows ?? []);
@@ -327,7 +327,7 @@
         return myShiftsCache;
       }
       const { rows } = await db(
-        `SELECT id, shift_type_id, date, member_id, note FROM shifts WHERE member_id = ? AND date >= ? ORDER BY date ASC LIMIT 50`,
+        `SELECT id, shift_type_id, date, member_id, note FROM app_shifts__shifts WHERE member_id = ? AND date >= ? ORDER BY date ASC LIMIT 50`,
         [ME.id, todayIso]
       );
       myShiftsCache = rows ?? [];
@@ -340,7 +340,7 @@
       if (!DB) return;
       const id = crypto.randomUUID();
       await db(
-        `INSERT INTO activity (id, shift_id, actor_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO app_shifts__activity (id, shift_id, actor_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
         [id, shiftId, ME?.id ?? "system", action, detail, new Date().toISOString()]
       ).catch(() => {});
     }
@@ -373,7 +373,7 @@
 
       if (DB) {
         await db(
-          `INSERT INTO shift_types (id, name, emoji, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO app_shifts__shift_types (id, name, emoji, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
           [id, fields.name, fields.emoji, fields.color, sortOrder, now]
         );
       }
@@ -385,7 +385,7 @@
 
     async function updateShiftType(id, fields) {
       if (DB) {
-        await db(`UPDATE shift_types SET name = ?, emoji = ?, color = ? WHERE id = ?`, [fields.name, fields.emoji, fields.color, id]);
+        await db(`UPDATE app_shifts__shift_types SET name = ?, emoji = ?, color = ? WHERE id = ?`, [fields.name, fields.emoji, fields.color, id]);
       }
       const idx = shiftTypes.findIndex(t => t.id === id);
       if (idx !== -1) shiftTypes[idx] = { ...shiftTypes[idx], ...fields };
@@ -403,8 +403,8 @@
       if (!ok) return;
 
       if (DB) {
-        await db(`DELETE FROM shifts WHERE shift_type_id = ?`, [id]);
-        await db(`DELETE FROM shift_types WHERE id = ?`, [id]);
+        await db(`DELETE FROM app_shifts__shifts WHERE shift_type_id = ?`, [id]);
+        await db(`DELETE FROM app_shifts__shift_types WHERE id = ?`, [id]);
       }
       shiftTypes = shiftTypes.filter(t => t.id !== id);
       shifts = shifts.filter(s => s.shift_type_id !== id);
@@ -424,7 +424,7 @@
       const now = new Date().toISOString();
 
       if (existingShift) {
-        if (DB) await db(`UPDATE shifts SET member_id = ?, updated_at = ? WHERE id = ?`, [memberId, now, existingShift.id]);
+        if (DB) await db(`UPDATE app_shifts__shifts SET member_id = ?, updated_at = ? WHERE id = ?`, [memberId, now, existingShift.id]);
         const idx = shifts.findIndex(s => s.id === existingShift.id);
         if (idx !== -1) shifts[idx] = { ...shifts[idx], member_id: memberId };
         invalidateMyShiftsCache();
@@ -441,7 +441,7 @@
       const id = crypto.randomUUID();
       if (DB) {
         await db(
-          `INSERT INTO shifts (id, shift_type_id, date, member_id, note, created_at, updated_at) VALUES (?, ?, ?, ?, '', ?, ?)`,
+          `INSERT INTO app_shifts__shifts (id, shift_type_id, date, member_id, note, created_at, updated_at) VALUES (?, ?, ?, ?, '', ?, ?)`,
           [id, shiftTypeId, date, memberId, now, now]
         );
       }
@@ -464,7 +464,7 @@
       });
       if (!ok) return;
 
-      if (DB) await db(`DELETE FROM shifts WHERE id = ?`, [shift.id]);
+      if (DB) await db(`DELETE FROM app_shifts__shifts WHERE id = ?`, [shift.id]);
       shifts = shifts.filter(s => s.id !== shift.id);
       invalidateMyShiftsCache();
       closeModal();
@@ -486,7 +486,7 @@
         const placeholders = created.map(() => "(?, ?, ?, ?, '', ?, ?)").join(", ");
         const params = created.flatMap(c => [c.id, c.shift_type_id, c.date, c.member_id, now, now]);
         await db(
-          `INSERT INTO shifts (id, shift_type_id, date, member_id, note, created_at, updated_at) VALUES ${placeholders}`,
+          `INSERT INTO app_shifts__shifts (id, shift_type_id, date, member_id, note, created_at, updated_at) VALUES ${placeholders}`,
           params
         ).catch(() => {});
       }
