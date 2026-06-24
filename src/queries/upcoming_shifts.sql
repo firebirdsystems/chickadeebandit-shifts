@@ -8,6 +8,6 @@ SELECT
 FROM app_shifts__shifts s
 JOIN app_shifts__shift_types t
   ON t.id = s.shift_type_id
-WHERE s.date >= to_char(NOW(), 'YYYY-MM-DD')
+WHERE s.date >= date('now')
 ORDER BY s.date ASC
 LIMIT 200

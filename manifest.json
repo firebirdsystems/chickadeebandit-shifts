@@ -22,5 +22,19 @@
     "allowed": true,
     "mode": "read",
     "db_exports": ["upcoming_shifts", "shift_summary"]
+  },
+  "row_policies": {
+    "app_shifts__shift_types": {
+      "kind": "adult_writable"
+    },
+    "app_shifts__shifts": {
+      "kind": "adult_writable"
+    },
+    "app_shifts__activity": {
+      "kind": "owner_only",
+      "member_column": "actor_id",
+      "adults_bypass": false,
+      "member_can_update": false
+    }
   }
 }

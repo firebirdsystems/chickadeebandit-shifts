@@ -488,7 +488,7 @@
         await db(
           `INSERT INTO app_shifts__shifts (id, shift_type_id, date, member_id, note, created_at, updated_at) VALUES ${placeholders}`,
           params
-        ).catch(() => {});
+        );
       }
 
       // Merge into local state: replace any cached week that overlaps this range.
