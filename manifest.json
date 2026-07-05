@@ -1,12 +1,12 @@
 {
   "id": "shifts",
   "name": "Shift Scheduler",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "description": "Create recurring duty shifts and assign them by member. Leadership manages the rotation; members see their upcoming obligations.",
   "entrypoint": "index.html",
   "runtime": "static",
   "category": "organization",
-  "tags": ["scheduling", "org", "duties", "rotation"],
+  "tags": ["scheduling", "org", "duties", "rotation", "signup"],
   "data_access": {
     "reads": ["family.members"],
     "writes": []
@@ -16,6 +16,7 @@
     "requires_approval": false
   },
   "storage": "db",
+  "db_plaintext_columns": ["capacity"],
   "nav": { "label": "Shifts" },
   "icon": "📅",
   "ai_access": {
@@ -23,12 +24,25 @@
     "mode": "read",
     "db_exports": ["upcoming_shifts", "shift_summary"]
   },
+  "slot_claims": {
+    "slot_table": "shifts",
+    "capacity_column": "capacity",
+    "claims_table": "shift_claims",
+    "slot_fk_column": "shift_id",
+    "member_column": "member_id",
+    "created_at_column": "claimed_at",
+    "one_claim_per_member": true,
+    "assign_role": "adult"
+  },
   "row_policies": {
     "shift_types": {
       "kind": "adult_writable"
     },
     "shifts": {
       "kind": "adult_writable"
+    },
+    "shift_claims": {
+      "kind": "endpoint_only"
     },
     "activity": {
       "kind": "owner_only",

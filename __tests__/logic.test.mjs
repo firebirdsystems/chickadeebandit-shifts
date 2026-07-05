@@ -10,6 +10,9 @@ import {
   groupByDate,
   groupByType,
   canManage,
+  claimsFor,
+  openSpots,
+  hasClaim,
 } from "../src/logic.js";
 
 describe("date helpers", () => {
@@ -90,6 +93,31 @@ describe("grouping helpers", () => {
     const map = groupByType(shifts);
     expect(map.get("cook")).toHaveLength(2);
     expect(map.get("clean")).toHaveLength(1);
+  });
+});
+
+describe("claim helpers", () => {
+  const claims = [
+    { id: "c1", shift_id: "s1", member_id: "a" },
+    { id: "c2", shift_id: "s1", member_id: "b" },
+    { id: "c3", shift_id: "s2", member_id: "a" },
+  ];
+
+  it("claimsFor returns the claims on one shift", () => {
+    expect(claimsFor(claims, "s1")).toHaveLength(2);
+    expect(claimsFor(claims, "s3")).toHaveLength(0);
+  });
+
+  it("openSpots subtracts claims from capacity, never below zero", () => {
+    expect(openSpots({ id: "s1", capacity: 3 }, claims)).toBe(1);
+    expect(openSpots({ id: "s1", capacity: 1 }, claims)).toBe(0);
+    expect(openSpots({ id: "s2" }, claims)).toBe(0); // capacity defaults to 1
+    expect(openSpots({ id: "s3" }, claims)).toBe(1);
+  });
+
+  it("hasClaim checks a member's claim on a shift", () => {
+    expect(hasClaim(claims, "s1", "a")).toBe(true);
+    expect(hasClaim(claims, "s2", "b")).toBe(false);
   });
 });
 

@@ -102,9 +102,26 @@ export function groupByType(shifts) {
   return map;
 }
 
+// ── Claim helpers ─────────────────────────────────────────────────────────────
+
+// Claims are rows from shift_claims: { id, shift_id, member_id }.
+
+export function claimsFor(claims, shiftId) {
+  return claims.filter(c => c.shift_id === shiftId);
+}
+
+export function openSpots(shift, claims) {
+  return Math.max(0, (shift.capacity ?? 1) - claimsFor(claims, shift.id).length);
+}
+
+export function hasClaim(claims, shiftId, memberId) {
+  return claims.some(c => c.shift_id === shiftId && c.member_id === memberId);
+}
+
 // ── Access control ────────────────────────────────────────────────────────────
 
-// Leadership = adults/admins. Members can only view; leadership can assign.
+// Leadership = adults/admins. Anyone can claim an open shift; only leadership
+// can create shifts, assign other members, and generate rotations.
 export function canManage(me) {
   return isAdult(me);
 }

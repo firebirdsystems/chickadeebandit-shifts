@@ -198,15 +198,30 @@
     import {
       isAdult, canManage, addDays, isoWeekStart, daysInRange,
       weekdayLabel, monthDayLabel, relativeDay, generateRotation,
-      groupByDate, toISODate,
+      groupByDate, toISODate, claimsFor, openSpots, hasClaim,
     } from "./logic.js";
 
-    const CONTEXT = window.__CONTEXT_URL ?? "";
-    const DB      = window.__DB_URL      ?? "";
-    const APP_ID  = window.__APP_ID      ?? "shifts";
-    const ME      = window.__CURRENT_MEMBER ?? null;
+    const CONTEXT      = window.__CONTEXT_URL   ?? "";
+    const DB           = window.__DB_URL        ?? "";
+    const APP_ID       = window.__APP_ID        ?? "shifts";
+    const ME           = window.__CURRENT_MEMBER ?? null;
+    const CLAIM_URL    = window.__CLAIM_URL     ?? "";
+    const RELEASE_URL  = window.__RELEASE_URL   ?? "";
+    const ASSIGN_URL   = window.__ASSIGN_URL    ?? "";
+    const UNASSIGN_URL = window.__UNASSIGN_URL  ?? "";
 
     const db = createDbHelper(DB);
+
+    async function postJson(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? "Request failed");
+      return json;
+    }
 
     const PALETTE = ["#6366f1", "#0891b2", "#059669", "#d97706", "#dc2626", "#7c3aed", "#db2777", "#65a30d"];
     const EMOJIS = ["🍳", "🧹", "🛡️", "📋", "🚪", "🗑️", "🧺", "🌱", "🔧", "📞", "🔄"];
@@ -215,7 +230,8 @@
     let memberMap = new Map();
     let shiftTypes = [];
     let shifts = []; // currently visible week's shifts
-    const weekCache = new Map();
+    let claims = []; // shift_claims rows for the visible week's shifts
+    const weekCache = new Map(); // start -> { shifts, claims }
 
     const todayIso = toISODate(new Date());
     let weekStart = isoWeekStart(todayIso);
@@ -254,23 +270,36 @@
       shiftTypes = rows ?? [];
     }
 
+    async function loadClaimsFor(shiftIds) {
+      if (!shiftIds.length) return [];
+      const placeholders = shiftIds.map(() => "?").join(", ");
+      const { rows } = await db(
+        `SELECT id, shift_id, member_id FROM app_shifts__shift_claims WHERE shift_id IN (${placeholders})`,
+        shiftIds
+      );
+      return rows ?? [];
+    }
+
     async function loadShiftsForWeek(start) {
       if (weekCache.has(start)) {
-        shifts = weekCache.get(start);
+        ({ shifts, claims } = weekCache.get(start));
         return;
       }
       const end = addDays(start, 6);
       if (!DB) {
-        shifts = demoShiftsForWeek(start, end);
-        weekCache.set(start, shifts);
+        const demo = demoShiftsForWeek(start, end);
+        shifts = demo.shifts;
+        claims = demo.claims;
+        weekCache.set(start, demo);
         return;
       }
       const { rows } = await db(
-        `SELECT id, shift_type_id, date, member_id, note FROM app_shifts__shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
+        `SELECT id, shift_type_id, date, capacity, note FROM app_shifts__shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
         [start, end]
       );
       shifts = rows ?? [];
-      weekCache.set(start, shifts);
+      claims = await loadClaimsFor(shifts.map(s => s.id));
+      weekCache.set(start, { shifts, claims });
     }
 
     // Warm the cache for the adjacent weeks so navigating forward/back feels instant.
@@ -280,31 +309,32 @@
         if (weekCache.has(w)) continue;
         const end = addDays(w, 6);
         db(
-          `SELECT id, shift_type_id, date, member_id, note FROM app_shifts__shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
+          `SELECT id, shift_type_id, date, capacity, note FROM app_shifts__shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
           [w, end]
-        ).then(({ rows }) => {
-          if (!weekCache.has(w)) weekCache.set(w, rows ?? []);
+        ).then(async ({ rows }) => {
+          const weekShifts = rows ?? [];
+          const weekClaims = await loadClaimsFor(weekShifts.map(s => s.id));
+          if (!weekCache.has(w)) weekCache.set(w, { shifts: weekShifts, claims: weekClaims });
         }).catch(() => {});
       }
     }
 
     function demoShiftsForWeek(start, end) {
-      if (!shiftTypes.length || !members.length) return [];
+      if (!shiftTypes.length || !members.length) return { shifts: [], claims: [] };
       const days = daysInRange(start, end);
-      const out = [];
+      const outShifts = [];
+      const outClaims = [];
       shiftTypes.forEach((t, ti) => {
         days.forEach((date, di) => {
           if ((di + ti) % 3 === 0) return; // sparse demo data
-          out.push({
-            id: `demo-${t.id}-${date}`,
-            shift_type_id: t.id,
-            date,
-            member_id: members[(di + ti) % members.length].id,
-            note: "",
-          });
+          const id = `demo-${t.id}-${date}`;
+          outShifts.push({ id, shift_type_id: t.id, date, capacity: 1, note: "" });
+          if ((di + ti) % 4 !== 0) { // leave some shifts open so Claim shows in demo
+            outClaims.push({ id: `claim-${id}`, shift_id: id, member_id: members[(di + ti) % members.length].id });
+          }
         });
       });
-      return out;
+      return { shifts: outShifts, claims: outClaims };
     }
 
     let myShiftsCache = null;
@@ -320,15 +350,26 @@
         const all = [];
         for (const w of [weekStart, addDays(weekStart, 7), addDays(weekStart, 14)]) {
           if (!weekCache.has(w)) weekCache.set(w, demoShiftsForWeek(w, addDays(w, 6)));
-          all.push(...weekCache.get(w));
+          const cached = weekCache.get(w);
+          const mine = new Set(cached.claims.filter(c => c.member_id === ME.id).map(c => c.shift_id));
+          all.push(...cached.shifts.filter(s => mine.has(s.id) && s.date >= todayIso));
         }
-        myShiftsCache = all.filter(s => s.member_id === ME.id && s.date >= todayIso)
-          .sort((a, b) => a.date.localeCompare(b.date));
+        myShiftsCache = all.sort((a, b) => a.date.localeCompare(b.date));
         return myShiftsCache;
       }
+      const { rows: myClaims } = await db(
+        `SELECT shift_id FROM app_shifts__shift_claims WHERE member_id = ? LIMIT 200`,
+        [ME.id]
+      );
+      const ids = (myClaims ?? []).map(c => c.shift_id);
+      if (!ids.length) {
+        myShiftsCache = [];
+        return myShiftsCache;
+      }
+      const placeholders = ids.map(() => "?").join(", ");
       const { rows } = await db(
-        `SELECT id, shift_type_id, date, member_id, note FROM app_shifts__shifts WHERE member_id = ? AND date >= ? ORDER BY date ASC LIMIT 50`,
-        [ME.id, todayIso]
+        `SELECT id, shift_type_id, date, capacity, note FROM app_shifts__shifts WHERE id IN (${placeholders}) AND date >= ? ORDER BY date ASC LIMIT 50`,
+        [...ids, todayIso]
       );
       myShiftsCache = rows ?? [];
       return myShiftsCache;
@@ -403,57 +444,100 @@
       if (!ok) return;
 
       if (DB) {
+        // Claims are endpoint-written, so release them best-effort before dropping the rows.
+        if (UNASSIGN_URL) {
+          const { rows: typeShifts } = await db(`SELECT id FROM app_shifts__shifts WHERE shift_type_id = ?`, [id]);
+          const ids = (typeShifts ?? []).map(s => s.id);
+          const typeClaims = await loadClaimsFor(ids);
+          await Promise.all(typeClaims.map(c =>
+            postJson(UNASSIGN_URL, { slot_id: c.shift_id, member_id: c.member_id }).catch(() => {})
+          ));
+        }
         await db(`DELETE FROM app_shifts__shifts WHERE shift_type_id = ?`, [id]);
         await db(`DELETE FROM app_shifts__shift_types WHERE id = ?`, [id]);
       }
       shiftTypes = shiftTypes.filter(t => t.id !== id);
       shifts = shifts.filter(s => s.shift_type_id !== id);
-      for (const cached of weekCache.values()) {
-        // mutate in place isn't possible on cached arrays here since they may be the same ref; rebuild cache
-      }
+      claims = claims.filter(c => shifts.some(s => s.id === c.shift_id));
       weekCache.clear();
-      weekCache.set(weekStart, shifts);
+      weekCache.set(weekStart, { shifts, claims });
       invalidateMyShiftsCache();
       closeModal();
       render();
       prefetchAdjacentWeeks(weekStart);
     }
 
-    // Assign (or create+assign) a shift for a given (date, shiftTypeId).
-    async function assignShift(existingShift, shiftTypeId, date, memberId) {
-      const now = new Date().toISOString();
+    // ── Claims (hub slot-claims protocol) ───────────────────────────────────
 
-      if (existingShift) {
-        if (DB) await db(`UPDATE app_shifts__shifts SET member_id = ?, updated_at = ? WHERE id = ?`, [memberId, now, existingShift.id]);
-        const idx = shifts.findIndex(s => s.id === existingShift.id);
-        if (idx !== -1) shifts[idx] = { ...shifts[idx], member_id: memberId };
-        invalidateMyShiftsCache();
-        closeModal();
-        render();
-        Promise.all([
-          logActivity(existingShift.id, memberId ? "assigned" : "unassigned",
-            memberId ? `${memberMap.get(memberId)?.name ?? "Someone"} assigned` : "Unassigned"),
-          memberId ? notify("New shift assigned", `You're on duty ${date}.`) : Promise.resolve(),
-        ]).catch(() => {});
-        return;
-      }
-
-      const id = crypto.randomUUID();
-      if (DB) {
-        await db(
-          `INSERT INTO app_shifts__shifts (id, shift_type_id, date, member_id, note, created_at, updated_at) VALUES (?, ?, ?, ?, '', ?, ?)`,
-          [id, shiftTypeId, date, memberId, now, now]
-        );
-      }
-      const newShift = { id, shift_type_id: shiftTypeId, date, member_id: memberId, note: "" };
-      shifts = [...shifts, newShift];
+    function localAddClaim(shiftId, memberId, claimId) {
+      claims = [...claims, { id: claimId ?? crypto.randomUUID(), shift_id: shiftId, member_id: memberId }];
+      weekCache.set(weekStart, { shifts, claims });
       invalidateMyShiftsCache();
+    }
+
+    function localRemoveClaim(shiftId, memberId) {
+      claims = claims.filter(c => !(c.shift_id === shiftId && c.member_id === memberId));
+      weekCache.set(weekStart, { shifts, claims });
+      invalidateMyShiftsCache();
+    }
+
+    async function claimShift(shift) {
+      if (CLAIM_URL) {
+        const res = await postJson(CLAIM_URL, { slot_id: shift.id });
+        localAddClaim(shift.id, ME.id, res.claim_id);
+      } else {
+        localAddClaim(shift.id, ME?.id ?? "demo-member-1");
+      }
       closeModal();
       render();
+      logActivity(shift.id, "claimed", `${ME?.name ?? "Someone"} claimed the shift`).catch(() => {});
+    }
+
+    async function releaseShift(shift) {
+      if (RELEASE_URL) await postJson(RELEASE_URL, { slot_id: shift.id });
+      localRemoveClaim(shift.id, ME?.id ?? "demo-member-1");
+      closeModal();
+      render();
+      logActivity(shift.id, "released", `${ME?.name ?? "Someone"} released the shift`).catch(() => {});
+    }
+
+    async function assignMember(shift, memberId) {
+      if (ASSIGN_URL) {
+        const res = await postJson(ASSIGN_URL, { slot_id: shift.id, member_id: memberId });
+        localAddClaim(shift.id, memberId, res.claim_id);
+      } else {
+        localAddClaim(shift.id, memberId);
+      }
+      render();
       Promise.all([
-        logActivity(id, "created", `Shift created for ${date}`),
-        memberId ? notify("New shift assigned", `You're on duty ${date}.`) : Promise.resolve(),
+        logActivity(shift.id, "assigned", `${memberMap.get(memberId)?.name ?? "Someone"} assigned`),
+        notify("New shift assigned", `You're on duty ${shift.date}.`),
       ]).catch(() => {});
+    }
+
+    async function unassignMember(shift, memberId) {
+      if (UNASSIGN_URL) await postJson(UNASSIGN_URL, { slot_id: shift.id, member_id: memberId });
+      localRemoveClaim(shift.id, memberId);
+      render();
+      logActivity(shift.id, "unassigned", `${memberMap.get(memberId)?.name ?? "Someone"} unassigned`).catch(() => {});
+    }
+
+    // Create a shift row for a (date, shiftTypeId) cell. Leadership only.
+    async function createShift(shiftTypeId, date, capacity) {
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      if (DB) {
+        await db(
+          `INSERT INTO app_shifts__shifts (id, shift_type_id, date, capacity, note, created_at, updated_at) VALUES (?, ?, ?, ?, '', ?, ?)`,
+          [id, shiftTypeId, date, capacity, now, now]
+        );
+      }
+      const newShift = { id, shift_type_id: shiftTypeId, date, capacity, note: "" };
+      shifts = [...shifts, newShift];
+      weekCache.set(weekStart, { shifts, claims });
+      invalidateMyShiftsCache();
+      logActivity(id, "created", `Shift created for ${date}`).catch(() => {});
+      return newShift;
     }
 
     async function deleteShift(shift) {
@@ -464,8 +548,17 @@
       });
       if (!ok) return;
 
+      // Claims are endpoint-written, so clear them through unassign before dropping the row.
+      const holders = claimsFor(claims, shift.id).map(c => c.member_id);
+      if (UNASSIGN_URL) {
+        await Promise.all(holders.map(memberId =>
+          postJson(UNASSIGN_URL, { slot_id: shift.id, member_id: memberId }).catch(() => {})
+        ));
+      }
       if (DB) await db(`DELETE FROM app_shifts__shifts WHERE id = ?`, [shift.id]);
       shifts = shifts.filter(s => s.id !== shift.id);
+      claims = claims.filter(c => c.shift_id !== shift.id);
+      weekCache.set(weekStart, { shifts, claims });
       invalidateMyShiftsCache();
       closeModal();
       render();
@@ -478,24 +571,41 @@
         id: crypto.randomUUID(),
         shift_type_id: shiftTypeId,
         date: r.date,
-        member_id: r.member_id,
+        capacity: 1,
         note: "",
+        member_id: r.member_id,
       }));
 
       if (DB && created.length > 0) {
-        const placeholders = created.map(() => "(?, ?, ?, ?, '', ?, ?)").join(", ");
-        const params = created.flatMap(c => [c.id, c.shift_type_id, c.date, c.member_id, now, now]);
+        const placeholders = created.map(() => "(?, ?, ?, 1, '', ?, ?)").join(", ");
+        const params = created.flatMap(c => [c.id, c.shift_type_id, c.date, now, now]);
         await db(
-          `INSERT INTO app_shifts__shifts (id, shift_type_id, date, member_id, note, created_at, updated_at) VALUES ${placeholders}`,
+          `INSERT INTO app_shifts__shifts (id, shift_type_id, date, capacity, note, created_at, updated_at) VALUES ${placeholders}`,
           params
         );
+      }
+
+      // Assign each rotation member through the hub endpoint (claims are endpoint-only).
+      const newClaims = [];
+      if (ASSIGN_URL) {
+        await Promise.all(created.filter(c => c.member_id).map(async c => {
+          try {
+            const res = await postJson(ASSIGN_URL, { slot_id: c.id, member_id: c.member_id });
+            newClaims.push({ id: res.claim_id, shift_id: c.id, member_id: c.member_id });
+          } catch { /* leave the shift open if a single assign fails */ }
+        }));
+      } else {
+        for (const c of created) {
+          if (c.member_id) newClaims.push({ id: crypto.randomUUID(), shift_id: c.id, member_id: c.member_id });
+        }
       }
 
       // Merge into local state: replace any cached week that overlaps this range.
       weekCache.clear();
       const inCurrentWeek = created.filter(c => c.date >= weekStart && c.date <= addDays(weekStart, 6));
-      shifts = [...shifts, ...inCurrentWeek];
-      weekCache.set(weekStart, shifts);
+      shifts = [...shifts, ...inCurrentWeek.map(({ member_id, ...s }) => s)];
+      claims = [...claims, ...newClaims.filter(c => inCurrentWeek.some(s => s.id === c.shift_id))];
+      weekCache.set(weekStart, { shifts, claims });
       invalidateMyShiftsCache();
 
       closeModal();
@@ -586,34 +696,45 @@
       };
     }
 
-    function openAssignModal(shiftTypeId, date, existingShift) {
+    function openShiftModal(shiftTypeId, date, existingShift) {
       const type = shiftTypes.find(t => t.id === shiftTypeId);
-      const currentMemberId = existingShift?.member_id ?? null;
+      if (existingShift) {
+        renderShiftDetailModal(existingShift, type);
+        return;
+      }
+      if (!canManage(ME)) return;
 
+      // Leader creating a new shift cell — choose spots, optionally assign someone.
       openModal(`
         <h2>${type?.emoji ?? ""} ${esc(type?.name ?? "Shift")}</h2>
-        <div class="modal-sub">${weekdayLabel(date)}, ${monthDayLabel(date)} — choose who's on duty</div>
-        <div class="member-list" id="f-members">
-          <div class="member-opt ${currentMemberId === null ? "selected" : ""}" data-member="">
-            <div class="avatar" style="background:#9ca3af">—</div>
-            <span>Unassigned</span>
-          </div>
-          ${members.map(m => `
-            <div class="member-opt ${m.id === currentMemberId ? "selected" : ""}" data-member="${m.id}">
-              <div class="avatar" style="background:${memberColor(m.id)}">${initial(m.name)}</div>
-              <span>${esc(m.name)}</span>
-              <span class="role-badge">${esc(m.role)}</span>
+        <div class="modal-sub">${weekdayLabel(date)}, ${monthDayLabel(date)} — create this shift</div>
+        <div class="field">
+          <label for="f-capacity">Spots</label>
+          <input type="number" id="f-capacity" value="1" min="1" max="20" />
+        </div>
+        <div class="field">
+          <label>Assign someone right away (optional)</label>
+          <div class="member-list" id="f-members">
+            <div class="member-opt selected" data-member="">
+              <div class="avatar" style="background:#9ca3af">—</div>
+              <span>Leave open for members to claim</span>
             </div>
-          `).join("")}
+            ${members.map(m => `
+              <div class="member-opt" data-member="${m.id}">
+                <div class="avatar" style="background:${memberColor(m.id)}">${initial(m.name)}</div>
+                <span>${esc(m.name)}</span>
+                <span class="role-badge">${esc(m.role)}</span>
+              </div>
+            `).join("")}
+          </div>
         </div>
         <div class="modal-actions">
-          ${existingShift ? `<button class="btn btn-danger btn-sm" onclick="window.__deleteShift()">Remove shift</button>` : ""}
           <button class="btn btn-ghost" onclick="window.__closeModal()">Cancel</button>
-          <button class="btn btn-primary" onclick="window.__saveAssign()">Save</button>
+          <button class="btn btn-primary" id="f-create">Create</button>
         </div>
       `);
 
-      let selectedMember = currentMemberId;
+      let selectedMember = null;
       modalEl.querySelectorAll("#f-members .member-opt").forEach(el => {
         el.addEventListener("click", () => {
           modalEl.querySelectorAll("#f-members .member-opt").forEach(o => o.classList.remove("selected"));
@@ -623,17 +744,107 @@
       });
 
       window.__closeModal = closeModal;
-      window.__deleteShift = () => deleteShift(existingShift);
-      window.__saveAssign = async () => {
-        const btn = modalEl.querySelector(".modal-actions .btn-primary");
-        if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+      document.getElementById("f-create").addEventListener("click", async () => {
+        const capacity = Math.max(1, Math.min(20, parseInt(document.getElementById("f-capacity").value, 10) || 1));
+        const btn = document.getElementById("f-create");
+        btn.disabled = true; btn.textContent = "Creating…";
         try {
-          await assignShift(existingShift, shiftTypeId, date, selectedMember);
+          const shift = await createShift(shiftTypeId, date, capacity);
+          if (selectedMember) await assignMember(shift, selectedMember);
+          closeModal();
+          render();
         } catch (e) {
-          if (btn) { btn.disabled = false; btn.textContent = "Save"; }
+          btn.disabled = false; btn.textContent = "Create";
           document.getElementById("status").textContent = `Error: ${e.message}`;
         }
-      };
+      });
+    }
+
+    function renderShiftDetailModal(shift, type) {
+      const leader = canManage(ME);
+      const holders = claimsFor(claims, shift.id);
+      const open = openSpots(shift, claims);
+      const mine = ME ? hasClaim(claims, shift.id, ME.id) : false;
+
+      const holderRows = holders.map(c => {
+        const m = memberMap.get(c.member_id);
+        return `<div class="member-opt" style="cursor:default">
+          <div class="avatar" style="background:${memberColor(c.member_id)}">${initial(m?.name ?? "?")}</div>
+          <span>${esc(m?.name ?? "Unknown")}</span>
+          ${leader ? `<button class="btn-icon" style="margin-left:auto" data-unassign="${c.member_id}" title="Unassign">✕</button>` : ""}
+        </div>`;
+      }).join("") || `<div class="modal-sub" style="margin:0">Nobody yet — this shift is open.</div>`;
+
+      const assignables = leader && open > 0
+        ? members.filter(m => !holders.some(c => c.member_id === m.id))
+        : [];
+
+      openModal(`
+        <h2>${type?.emoji ?? ""} ${esc(type?.name ?? "Shift")}</h2>
+        <div class="modal-sub">${weekdayLabel(shift.date)}, ${monthDayLabel(shift.date)} — ${open > 0 ? `${open} spot${open === 1 ? "" : "s"} open` : "full"}</div>
+        <div class="field">
+          <label>On duty</label>
+          <div class="member-list">${holderRows}</div>
+        </div>
+        ${assignables.length ? `
+          <div class="field">
+            <label>Assign a member</label>
+            <div class="member-list">
+              ${assignables.map(m => `
+                <div class="member-opt" data-assign="${m.id}">
+                  <div class="avatar" style="background:${memberColor(m.id)}">${initial(m.name)}</div>
+                  <span>${esc(m.name)}</span>
+                  <span class="role-badge">${esc(m.role)}</span>
+                </div>
+              `).join("")}
+            </div>
+          </div>` : ""}
+        <div class="modal-actions">
+          ${leader ? `<button class="btn btn-danger btn-sm" id="f-delete">Remove shift</button>` : ""}
+          <button class="btn btn-ghost" onclick="window.__closeModal()">Close</button>
+          ${ME && mine ? `<button class="btn btn-ghost" id="f-release">Release my spot</button>` : ""}
+          ${ME && !mine && open > 0 ? `<button class="btn btn-primary" id="f-claim">Claim this shift</button>` : ""}
+        </div>
+      `);
+
+      window.__closeModal = closeModal;
+      document.getElementById("f-delete")?.addEventListener("click", () => deleteShift(shift));
+      document.getElementById("f-claim")?.addEventListener("click", async (e) => {
+        e.target.disabled = true;
+        try { await claimShift(shift); }
+        catch (err) {
+          e.target.disabled = false;
+          document.getElementById("status").textContent = `Error: ${err.message}`;
+        }
+      });
+      document.getElementById("f-release")?.addEventListener("click", async (e) => {
+        e.target.disabled = true;
+        try { await releaseShift(shift); }
+        catch (err) {
+          e.target.disabled = false;
+          document.getElementById("status").textContent = `Error: ${err.message}`;
+        }
+      });
+      modalEl.querySelectorAll("[data-assign]").forEach(el => {
+        el.addEventListener("click", async () => {
+          try {
+            await assignMember(shift, el.dataset.assign);
+            renderShiftDetailModal(shift, type);
+          } catch (err) {
+            document.getElementById("status").textContent = `Error: ${err.message}`;
+          }
+        });
+      });
+      modalEl.querySelectorAll("[data-unassign]").forEach(el => {
+        el.addEventListener("click", async () => {
+          try {
+            await unassignMember(shift, el.dataset.unassign);
+            renderShiftDetailModal(shift, type);
+          } catch (err) {
+            document.getElementById("status").textContent = `Error: ${err.message}`;
+          }
+        });
+      });
     }
 
     function openRotationModal() {
@@ -781,8 +992,8 @@
     function renderHeader() {
       const leader = canManage(ME);
       document.getElementById("header-subtitle").textContent = leader
-        ? "Leadership view — manage duties & assignments"
-        : ME ? `Welcome, ${ME.name}` : "Demo mode";
+        ? "Leadership view — manage duties, assign, or let members claim"
+        : ME ? `Welcome, ${ME.name} — tap an open shift to claim it` : "Demo mode";
 
       const actions = document.getElementById("header-actions");
       if (leader) {
@@ -884,14 +1095,17 @@
           const shift = (byDate.get(d) ?? []).find(s => s.shift_type_id === t.id);
           html += `<div class="grid-cell ${isToday ? "today-col" : ""}">`;
           if (shift) {
-            if (shift.member_id) {
-              const m = memberMap.get(shift.member_id);
+            const holders = claimsFor(claims, shift.id);
+            const open = openSpots(shift, claims);
+            if (holders.length) {
+              const first = memberMap.get(holders[0].member_id);
+              const extra = holders.length - 1;
               html += `<div class="shift-pill" data-cell-type="${t.id}" data-cell-date="${d}" data-shift-id="${shift.id}">
-                ${memberAvatar(shift.member_id)}
-                <span>${esc(m?.name ?? "Unknown")}</span>
+                ${memberAvatar(holders[0].member_id)}
+                <span>${esc(first?.name ?? "Unknown")}${extra ? ` +${extra}` : ""}${open ? ` · ${open} open` : ""}</span>
               </div>`;
             } else {
-              html += `<div class="shift-pill unassigned" data-cell-type="${t.id}" data-cell-date="${d}" data-shift-id="${shift.id}">Unassigned</div>`;
+              html += `<div class="shift-pill unassigned" data-cell-type="${t.id}" data-cell-date="${d}" data-shift-id="${shift.id}">Open${(shift.capacity ?? 1) > 1 ? ` (${shift.capacity})` : ""}</div>`;
             }
           } else if (leader) {
             html += `<div class="empty-cell" data-cell-type="${t.id}" data-cell-date="${d}">+</div>`;
@@ -914,14 +1128,14 @@
           openShiftTypeModal(t);
         });
       });
-      if (!leader) return;
+      // Everyone may open an existing shift (to claim/release); only leadership
+      // gets the empty-cell "+" to create one.
       document.querySelectorAll("[data-cell-type][data-cell-date]").forEach(el => {
         el.addEventListener("click", () => {
-          const shiftTypeId = el.dataset.cellType;
-          const date = el.dataset.cellDate;
           const shiftId = el.dataset.shiftId;
           const existing = shiftId ? shifts.find(s => s.id === shiftId) : null;
-          openAssignModal(shiftTypeId, date, existing ?? null);
+          if (!existing && !leader) return;
+          openShiftModal(el.dataset.cellType, el.dataset.cellDate, existing ?? null);
         });
       });
     }
@@ -965,7 +1179,8 @@
     (async () => {
       await Promise.all([loadMembers(), loadShiftTypes()]);
       await loadShiftsForWeek(weekStart);
-      view = canManage(ME) ? "week" : "mine";
+      // Everyone starts on the week grid now that members can claim open shifts.
+      view = "week";
       await render();
       prefetchAdjacentWeeks(weekStart);
     })();

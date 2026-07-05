@@ -1,9 +1,10 @@
 SELECT
-  member_id,
+  c.member_id,
   COUNT(*) AS shift_count
-FROM app_shifts__shifts
-WHERE date >= date('now')
-  AND member_id IS NOT NULL
-GROUP BY member_id
+FROM app_shifts__shift_claims c
+JOIN app_shifts__shifts s
+  ON s.id = c.shift_id
+WHERE s.date >= date('now')
+GROUP BY c.member_id
 ORDER BY shift_count DESC
 LIMIT 100

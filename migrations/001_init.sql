@@ -9,12 +9,12 @@ CREATE TABLE IF NOT EXISTS app_shifts__shift_types (
   PRIMARY KEY (id)
 );
 
--- Concrete shift instances — one row per duty-day assignment
+-- Concrete shift instances — one row per duty-day, claimable up to capacity
 CREATE TABLE IF NOT EXISTS app_shifts__shifts (
   id            TEXT NOT NULL,
   shift_type_id TEXT NOT NULL,
   date          TEXT NOT NULL,
-  member_id     TEXT,
+  capacity      INTEGER NOT NULL DEFAULT 1,
   note          TEXT NOT NULL DEFAULT '',
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL,
@@ -22,7 +22,19 @@ CREATE TABLE IF NOT EXISTS app_shifts__shifts (
 );
 
 CREATE INDEX IF NOT EXISTS shifts_date_idx ON app_shifts__shifts (date);
-CREATE INDEX IF NOT EXISTS shifts_member_idx ON app_shifts__shifts (member_id, date);
+
+-- Who holds each shift — written only by the hub's slot-claims endpoints
+-- (claim/release for self-signup, assign/unassign for leadership)
+CREATE TABLE IF NOT EXISTS app_shifts__shift_claims (
+  id         TEXT NOT NULL,
+  shift_id   TEXT NOT NULL,
+  member_id  TEXT NOT NULL,
+  claimed_at TEXT NOT NULL,
+  PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS shift_claims_shift_idx ON app_shifts__shift_claims (shift_id);
+CREATE INDEX IF NOT EXISTS shift_claims_member_idx ON app_shifts__shift_claims (member_id, shift_id);
 
 CREATE TABLE IF NOT EXISTS app_shifts__activity (
   id           TEXT NOT NULL,
