@@ -706,7 +706,7 @@
 
       // Leader creating a new shift cell — choose spots, optionally assign someone.
       openModal(`
-        <h2>${type?.emoji ?? ""} ${esc(type?.name ?? "Shift")}</h2>
+        <h2>${esc(type?.emoji ?? "")} ${esc(type?.name ?? "Shift")}</h2>
         <div class="modal-sub">${weekdayLabel(date)}, ${monthDayLabel(date)} — create this shift</div>
         <div class="field">
           <label for="f-capacity">Spots</label>
@@ -780,7 +780,7 @@
         : [];
 
       openModal(`
-        <h2>${type?.emoji ?? ""} ${esc(type?.name ?? "Shift")}</h2>
+        <h2>${esc(type?.emoji ?? "")} ${esc(type?.name ?? "Shift")}</h2>
         <div class="modal-sub">${weekdayLabel(shift.date)}, ${monthDayLabel(shift.date)} — ${open > 0 ? `${open} spot${open === 1 ? "" : "s"} open` : "full"}</div>
         <div class="field">
           <label>On duty</label>
@@ -868,7 +868,7 @@
         <div class="field">
           <label for="f-type">Duty</label>
           <select id="f-type">
-            ${shiftTypes.map(t => `<option value="${t.id}">${t.emoji} ${esc(t.name)}</option>`).join("")}
+            ${shiftTypes.map(t => `<option value="${esc(t.id)}">${esc(t.emoji)} ${esc(t.name)}</option>`).join("")}
           </select>
         </div>
         <div class="field-row">
@@ -1086,7 +1086,7 @@
       for (const t of shiftTypes) {
         html += `<div class="grid-cell type-cell">
           <span class="type-swatch" style="background:${t.color}"></span>
-          <span>${t.emoji} ${esc(t.name)}</span>
+          <span>${esc(t.emoji)} ${esc(t.name)}</span>
           ${leader ? `<span class="type-actions"><button class="btn-icon" data-edit-type="${t.id}" title="Edit">✏️</button></span>` : ""}
         </div>`;
 
@@ -1157,7 +1157,7 @@
               <div class="rel">${isRelLabel ? rel : weekdayLabel(s.date)}</div>
               <div class="num">${monthDayLabel(s.date).split(" ")[1]}</div>
             </div>
-            <div class="emoji">${t?.emoji ?? "🔄"}</div>
+            <div class="emoji">${esc(t?.emoji ?? "🔄")}</div>
             <div class="info">
               <div class="name">${esc(t?.name ?? "Shift")}</div>
               ${s.note ? `<div class="note">${esc(s.note)}</div>` : ""}
