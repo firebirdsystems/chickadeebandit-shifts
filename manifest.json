@@ -1,7 +1,7 @@
 {
   "id": "shifts",
   "name": "Shift Scheduler",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Create recurring duty shifts and assign them by member. Leadership manages the rotation; members see their upcoming obligations.",
   "entrypoint": "index.html",
   "runtime": "static",
@@ -16,8 +16,16 @@
     "requires_approval": false
   },
   "storage": "db",
-  "db_plaintext_columns": ["capacity"],
+  "db_plaintext_columns": ["capacity", "date"],
   "nav": { "label": "Shifts" },
+  "agenda": {
+    "kind": "task",
+    "label": "Shifts",
+    "source": {
+      "kind": "sql",
+      "query": "SELECT s.id AS id, t.name AS title, s.date AS when_at, NULLIF(s.note, '') AS subtitle FROM app_shifts__shifts s JOIN app_shifts__shift_types t ON t.id = s.shift_type_id WHERE s.date = :today ORDER BY t.sort_order LIMIT 20"
+    }
+  },
   "icon": "📅",
   "ai_access": {
     "allowed": true,
