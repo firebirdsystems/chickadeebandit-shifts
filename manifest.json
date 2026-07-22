@@ -1,5 +1,6 @@
 {
   "id": "shifts",
+  "contexts": ["household", "shared_space"],
   "name": "Shift Scheduler",
   "version": "1.1.0",
   "description": "Create recurring duty shifts and assign them by member. Leadership manages the rotation; members see their upcoming obligations.",
