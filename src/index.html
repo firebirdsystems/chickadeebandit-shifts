@@ -198,7 +198,7 @@
     import {
       isAdult, canManage, addDays, isoWeekStart, daysInRange,
       weekdayLabel, monthDayLabel, relativeDay, generateRotation,
-      groupByDate, toISODate, claimsFor, openSpots, hasClaim,
+      groupByDate, toISODate, claimsFor, openSpots, hasClaim, chunkIds,
     } from "./logic.js";
 
     const CONTEXT      = window.__CONTEXT_URL   ?? "";
@@ -270,14 +270,21 @@
       shiftTypes = rows ?? [];
     }
 
+    // Sliced: D1 rejects a statement with more than 100 bound parameters, and
+    // this is called with every shift of a duty — deleting a duty with ~90+
+    // scheduled shifts threw here before the button ever reached the delete.
     async function loadClaimsFor(shiftIds) {
       if (!shiftIds.length) return [];
-      const placeholders = shiftIds.map(() => "?").join(", ");
-      const { rows } = await db(
-        `SELECT id, shift_id, member_id FROM app_shifts__shift_claims WHERE shift_id IN (${placeholders})`,
-        shiftIds
-      );
-      return rows ?? [];
+      const out = [];
+      for (const chunk of chunkIds(shiftIds)) {
+        const placeholders = chunk.map(() => "?").join(", ");
+        const { rows } = await db(
+          `SELECT id, shift_id, member_id FROM app_shifts__shift_claims WHERE shift_id IN (${placeholders})`,
+          chunk
+        );
+        out.push(...(rows ?? []));
+      }
+      return out;
     }
 
     async function loadShiftsForWeek(start) {
@@ -366,12 +373,19 @@
         myShiftsCache = [];
         return myShiftsCache;
       }
-      const placeholders = ids.map(() => "?").join(", ");
-      const { rows } = await db(
-        `SELECT id, shift_type_id, date, capacity, note FROM app_shifts__shifts WHERE id IN (${placeholders}) AND date >= ? ORDER BY date ASC LIMIT 50`,
-        [...ids, todayIso]
-      );
-      myShiftsCache = rows ?? [];
+      // Sliced for the same 100-bound-parameter ceiling: the claim query above
+      // returns up to 200 ids. The LIMIT is applied per slice, then again after
+      // merging, so the ordering stays the caller's contract.
+      const found = [];
+      for (const chunk of chunkIds(ids)) {
+        const placeholders = chunk.map(() => "?").join(", ");
+        const { rows } = await db(
+          `SELECT id, shift_type_id, date, capacity, note FROM app_shifts__shifts WHERE id IN (${placeholders}) AND date >= ? ORDER BY date ASC LIMIT 50`,
+          [...chunk, todayIso]
+        );
+        found.push(...(rows ?? []));
+      }
+      myShiftsCache = found.sort((a, b) => a.date.localeCompare(b.date)).slice(0, 50);
       return myShiftsCache;
     }
 

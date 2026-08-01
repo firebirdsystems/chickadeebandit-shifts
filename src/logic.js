@@ -125,3 +125,18 @@ export function hasClaim(claims, shiftId, memberId) {
 export function canManage(me) {
   return isAdult(me);
 }
+
+// ── Bound-parameter budget ────────────────────────────────────────────────────
+
+/** D1 rejects a statement carrying more than 100 bound parameters. Every
+ *  `IN (…)` built from a variable-length id list has to be issued in slices —
+ *  deleting a duty with more than ~90 scheduled shifts used to throw here, and
+ *  "my shifts" loads up to 200 claim ids. */
+export const MAX_BOUND_PARAMS = 90;
+
+/** Split a list into chunks of at most `size` ids. */
+export function chunkIds(ids, size = MAX_BOUND_PARAMS) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+  return out;
+}

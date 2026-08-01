@@ -13,6 +13,8 @@ import {
   claimsFor,
   openSpots,
   hasClaim,
+  chunkIds,
+  MAX_BOUND_PARAMS,
 } from "../src/logic.js";
 
 describe("date helpers", () => {
@@ -127,5 +129,22 @@ describe("canManage", () => {
     expect(canManage({ role: "admin" })).toBe(true);
     expect(canManage({ role: "child" })).toBe(false);
     expect(canManage(null)).toBe(false);
+  });
+});
+
+// Every `IN (…)` this app builds from an id list has to stay under D1's
+// 100-bound-parameter ceiling: deleting a duty loads the claims of every shift
+// it scheduled, and "my shifts" resolves up to 200 claim ids.
+describe("chunkIds", () => {
+  const ids = Array.from({ length: 200 }, (_, i) => `s${i}`);
+
+  it("never exceeds the bound-parameter budget", () => {
+    expect(chunkIds(ids).every(c => c.length <= MAX_BOUND_PARAMS)).toBe(true);
+  });
+  it("preserves every id exactly once, in order", () => {
+    expect(chunkIds(ids).flat()).toEqual(ids);
+  });
+  it("returns nothing for an empty list", () => {
+    expect(chunkIds([])).toEqual([]);
   });
 });
