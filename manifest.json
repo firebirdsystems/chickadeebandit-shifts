@@ -18,6 +18,16 @@
   },
   "storage": "db",
   "db_plaintext_columns": ["capacity", "date"],
+  "member_references": {
+    "shift_claims": { "column": "member_id", "on_removed": "delete" },
+    "activity": { "column": "actor_id", "on_removed": "keep" }
+  },
+  "delete_cascades": {
+    "shifts": [
+      { "table": "shift_claims", "foreign_key": "shift_id" },
+      { "table": "activity", "foreign_key": "shift_id" }
+    ]
+  },
   "nav": { "label": "Shifts" },
   "agenda": {
     "kind": "task",
