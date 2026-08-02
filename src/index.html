@@ -400,6 +400,23 @@
       ).catch(() => {});
     }
 
+    // Best-effort publish onto the household event bus. Only the two moments a
+    // shift gains a holder are published — releases and unassignments are churn,
+    // and creating an empty shift row is scheduling, not an obligation on anyone.
+    async function publishEvent(type, subjectId, payload = {}) {
+      const url = window.__EVENTS_URL ?? "";
+      if (!url) return;
+      try {
+        await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type, subject_id: subjectId, payload }),
+        });
+      } catch {
+        // The claim is already recorded by the hub; a failed publish is not fatal.
+      }
+    }
+
     async function notify(title, body) {
       await fetch(window.__NOTIFY_URL ?? "/api/notifications/send", {
         method: "POST",
@@ -505,6 +522,11 @@
       closeModal();
       render();
       logActivity(shift.id, "claimed", `${ME?.name ?? "Someone"} claimed the shift`).catch(() => {});
+      publishEvent("shift.claimed", shift.id, {
+        date: shift.date,
+        shift_type: shiftTypes.find(t => t.id === shift.shift_type_id)?.name ?? "",
+        member_id: ME?.id ?? "",
+      });
     }
 
     async function releaseShift(shift) {
@@ -526,6 +548,11 @@
       Promise.all([
         logActivity(shift.id, "assigned", `${memberMap.get(memberId)?.name ?? "Someone"} assigned`),
         notify("New shift assigned", `You're on duty ${shift.date}.`),
+        publishEvent("shift.assigned", shift.id, {
+          date: shift.date,
+          shift_type: shiftTypes.find(t => t.id === shift.shift_type_id)?.name ?? "",
+          member_id: memberId,
+        }),
       ]).catch(() => {});
     }
 

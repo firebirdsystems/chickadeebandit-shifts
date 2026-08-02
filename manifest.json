@@ -37,6 +37,23 @@
       "query": "SELECT s.id AS id, t.name AS title, s.date AS when_at, NULLIF(s.note, '') AS subtitle FROM app_shifts__shifts s JOIN app_shifts__shift_types t ON t.id = s.shift_type_id WHERE s.date = :today ORDER BY t.sort_order LIMIT 20"
     }
   },
+  "glance": {
+    "source": {
+      "kind": "sql",
+      "query": "SELECT COUNT(*) AS n FROM app_shifts__shift_claims c JOIN app_shifts__shifts s ON s.id = c.shift_id WHERE c.member_id = :me AND s.date >= :today AND s.date <= date(:today, '+6 days') LIMIT 1"
+    },
+    "display": {
+      "template": "badge",
+      "count": "n",
+      "label": "shifts you hold this week",
+      "severity": "info"
+    }
+  },
+  "publishes": ["shift.claimed", "shift.assigned"],
+  "publish_acls": {
+    "shift.claimed": { "require_role": "member" },
+    "shift.assigned": { "require_role": "adult" }
+  },
   "icon": "📅",
   "ai_access": {
     "allowed": true,
