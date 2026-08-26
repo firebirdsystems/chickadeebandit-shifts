@@ -17,6 +17,9 @@
     "requires_approval": false
   },
   "storage": "db",
+  "preload": {
+    "shift_types": {"sql": "SELECT id, name, emoji, color, sort_order FROM app_shifts__shift_types ORDER BY sort_order ASC, created_at ASC"}
+  },
   "db_plaintext_columns": ["capacity", "date"],
   "member_references": {
     "shift_claims": { "column": "member_id", "on_removed": "delete" },
