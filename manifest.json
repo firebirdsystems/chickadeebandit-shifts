@@ -2,7 +2,7 @@
   "id": "shifts",
   "contexts": ["household", "shared_space"],
   "name": "Shift Scheduler",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Create recurring duty shifts and assign them by member. Leadership manages the rotation; members see their upcoming obligations.",
   "entrypoint": "index.html",
   "runtime": "static",
@@ -20,7 +20,7 @@
   "preload": {
     "shift_types": {"sql": "SELECT id, name, emoji, color, sort_order FROM app_shifts__shift_types ORDER BY sort_order ASC, created_at ASC"}
   },
-  "db_plaintext_columns": ["capacity", "date"],
+  "db_plaintext_columns": ["capacity", "date", "color"],
   "member_references": {
     "shift_claims": { "column": "member_id", "on_removed": "delete" },
     "activity": { "column": "actor_id", "on_removed": "keep" }
