@@ -425,17 +425,6 @@
       }).catch(() => {});
     }
 
-    async function logHubActivity(type, description, deepLinkParams) {
-      await fetch(window.__ACTIVITY_URL ?? "/api/activity", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type, description,
-          metadata: { deepLink: { appId: APP_ID, params: deepLinkParams } },
-        }),
-      }).catch(() => {});
-    }
-
     // ── Mutations (optimistic) ──────────────────────────────────────────────
 
     async function createShiftType(fields) {
@@ -653,11 +642,14 @@
       render();
       prefetchAdjacentWeeks(weekStart);
 
-      Promise.all([
-        logHubActivity("shift_rotation_generated",
-          `${ME?.name ?? "Someone"} generated a rotation (${created.length} shifts)`, {}),
-        notify("New rotation scheduled", `${created.length} shifts have been scheduled.`),
-      ]).catch(() => {});
+      // No activity-feed write. /api/activity accepts only the hub's own closed
+      // type vocabulary (CALLER_ALLOWED_ACTIVITY_TYPES) and 403s anything else,
+      // so the "shift_rotation_generated" post that used to sit here never once
+      // landed — fetch does not reject on 4xx, so the .catch() swallowed it in
+      // silence. Rotation publishes no typed event either (this app declares
+      // only shift.claimed / shift.assigned), so the push below is the only
+      // notice members get.
+      notify("New rotation scheduled", `${created.length} shifts have been scheduled.`);
     }
 
     // ── Modals ────────────────────────────────────────────────────────────────
