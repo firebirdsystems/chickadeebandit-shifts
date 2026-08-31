@@ -194,7 +194,7 @@
   </div>
 
   <script type="module">
-    import { esc, memberColor, initial, hubConfirm, createDbHelper } from "/hub-sdk.js";
+    import { esc, memberColor, initial, hubConfirm, createDbHelper, logHubActivity } from "/hub-sdk.js";
     import {
       isAdult, canManage, addDays, isoWeekStart, daysInRange,
       weekdayLabel, monthDayLabel, relativeDay, generateRotation,
@@ -642,14 +642,19 @@
       render();
       prefetchAdjacentWeeks(weekStart);
 
-      // No activity-feed write. /api/activity accepts only the hub's own closed
-      // type vocabulary (CALLER_ALLOWED_ACTIVITY_TYPES) and 403s anything else,
-      // so the "shift_rotation_generated" post that used to sit here never once
-      // landed — fetch does not reject on 4xx, so the .catch() swallowed it in
-      // silence. Rotation publishes no typed event either (this app declares
-      // only shift.claimed / shift.assigned), so the push below is the only
-      // notice members get.
       notify("New rotation scheduled", `${created.length} shifts have been scheduled.`);
+      // Rotation generation is logged; claiming and releasing a single shift is
+      // not. Two reasons, and both matter: shift.claimed / shift.assigned
+      // already carry those moments on the bus, and the hub caps how many rows
+      // one app may hold in a page of the feed — an app that logs every claim
+      // spends that budget on its own churn and pushes out its own milestones.
+      // Generating a rotation is a once-a-period admin action that affects
+      // everyone and has no typed event at all. `shifts` is adult_writable, so
+      // the schedule this describes is already household-readable.
+      logHubActivity(
+        `${ME?.name ?? "Someone"} scheduled ${created.length} shift${created.length === 1 ? "" : "s"}`,
+        { deepLink: { appId: APP_ID } },
+      );
     }
 
     // ── Modals ────────────────────────────────────────────────────────────────
