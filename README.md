@@ -1,6 +1,6 @@
 # Shift Scheduler
 
-A [Chickadee Bandit](http://chickadeebandit.com) app.
+A [Chickadee Bandit](https://chickadeebandit.com/app-library/shifts) app.
 
 ## Features
 
