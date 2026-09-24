@@ -1,0 +1,189 @@
+{
+  "scenarios": [
+    {
+      "name": "only adults define shift types and shifts; a child can read the schedule",
+      "members": { "lead": "adult", "child": "child" },
+      "steps": [
+        {
+          "action": "db",
+          "as": "lead",
+          "sql": "INSERT INTO app_shifts__shift_types (id, name, emoji, color, sort_order, created_at) VALUES (?, ?, ?, ?, 0, ?)",
+          "params": ["t1", "Cook Night", "🍳", "#f97316", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "lead",
+          "sql": "INSERT INTO app_shifts__shifts (id, shift_type_id, date, capacity, note, created_at, updated_at) VALUES (?, ?, ?, 2, ?, ?, ?)",
+          "params": ["s1", "t1", "2026-01-05", "Tacos", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "child",
+          "sql": "INSERT INTO app_shifts__shifts (id, shift_type_id, date, capacity, note, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?)",
+          "params": ["s2", "t1", "2026-01-06", "Pizza", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 403 }
+        },
+        {
+          "action": "db",
+          "as": "child",
+          "sql": "UPDATE app_shifts__shifts SET capacity = 99 WHERE id = ?",
+          "params": ["s1"],
+          "expect": { "status": 403 }
+        },
+        {
+          "action": "db",
+          "as": "child",
+          "sql": "SELECT id, capacity FROM app_shifts__shifts",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "s1", "capacity": 2 }] }
+        }
+      ]
+    },
+    {
+      "name": "claims are written only through the slot-claims endpoint, but every member can see who holds a shift",
+      "members": { "lead": "adult", "member": "adult" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_shifts__shift_types (id, name, emoji, color, sort_order, created_at) VALUES ('t1', 'Front Desk', '🛎️', '#6366f1', 0, '2026-01-01T00:00:00Z')"
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_shifts__shifts (id, shift_type_id, date, capacity, note, created_at, updated_at) VALUES ('s1', 't1', '2026-01-05', 1, 'Morning', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+        },
+        {
+          "action": "db",
+          "as": "member",
+          "sql": "INSERT INTO app_shifts__shift_claims (id, shift_id, member_id, claimed_at) VALUES (?, ?, ?, ?)",
+          "params": ["c1", "s1", "{{member}}", "2026-01-02T00:00:00Z"],
+          "expect": { "status": 403, "errorIncludes": "endpoint" }
+        },
+        {
+          "action": "db",
+          "as": "lead",
+          "sql": "INSERT INTO app_shifts__shift_claims (id, shift_id, member_id, claimed_at) VALUES (?, ?, ?, ?)",
+          "params": ["c1", "s1", "{{member}}", "2026-01-02T00:00:00Z"],
+          "expect": { "status": 403, "errorIncludes": "endpoint" }
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_shifts__shift_claims (id, shift_id, member_id, claimed_at) VALUES ('c1', 's1', ?, '2026-01-02T00:00:00Z')",
+          "params": ["{{member}}"]
+        },
+        {
+          "action": "db",
+          "as": "member",
+          "sql": "DELETE FROM app_shifts__shift_claims WHERE id = ?",
+          "params": ["c1"],
+          "expect": { "status": 403, "errorIncludes": "endpoint" }
+        },
+        {
+          "action": "db",
+          "as": "lead",
+          "sql": "SELECT id, shift_id FROM app_shifts__shift_claims",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "c1", "shift_id": "s1" }] }
+        }
+      ]
+    },
+    {
+      "name": "the activity log is private to its actor, even from adults, and cannot be rewritten",
+      "members": { "lead": "adult", "child": "child" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_shifts__activity (id, shift_id, actor_id, action, detail, created_at) VALUES ('act_l', 's1', ?, 'assigned', 'Assigned a helper', '2026-01-01T00:00:00Z'), ('act_c', 's1', ?, 'claimed', 'Claimed the shift', '2026-01-01T00:00:00Z')",
+          "params": ["{{lead}}", "{{child}}"]
+        },
+        {
+          "action": "db",
+          "as": "lead",
+          "sql": "SELECT id FROM app_shifts__activity",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "act_l" }] }
+        },
+        {
+          "action": "db",
+          "as": "child",
+          "sql": "SELECT id FROM app_shifts__activity",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "act_c" }] }
+        },
+        {
+          "action": "db",
+          "as": "child",
+          "sql": "UPDATE app_shifts__activity SET action = 'released' WHERE id = ?",
+          "params": ["act_c"],
+          "expect": { "status": 403 }
+        },
+        {
+          "action": "db",
+          "as": "child",
+          "sql": "SELECT id, action FROM app_shifts__activity",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "act_c", "action": "claimed" }] }
+        }
+      ]
+    },
+    {
+      "name": "upcoming_shifts lists future shifts with their claim counts and shift_summary counts each member's upcoming claims",
+      "members": { "lead": "adult", "member": "adult" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_shifts__shift_types (id, name, emoji, color, sort_order, created_at) VALUES ('t1', 'Security', '🛡️', '#6366f1', 0, '2026-01-01T00:00:00Z')"
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_shifts__shifts (id, shift_type_id, date, capacity, note, created_at, updated_at) VALUES ('s_past', 't1', '2026-01-05', 2, 'Past', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), ('s_future', 't1', '2099-06-01', 2, 'Future', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_shifts__shift_claims (id, shift_id, member_id, claimed_at) VALUES ('c_past', 's_past', ?, '2026-01-02T00:00:00Z'), ('c_future', 's_future', ?, '2026-01-02T00:00:00Z')",
+          "params": ["{{member}}", "{{member}}"]
+        },
+        {
+          "action": "named",
+          "as": "lead",
+          "kind": "query",
+          "name": "upcoming_shifts",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "s_future", "claimed_count": 1, "shift_type_name": "Security" }] }
+        },
+        {
+          "action": "named",
+          "as": "lead",
+          "kind": "query",
+          "name": "shift_summary",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "shift_count": 1 }] }
+        }
+      ]
+    },
+    {
+      "name": "only an adult can publish a shift assignment; any member can publish a claim",
+      "members": { "lead": "adult", "child": "child" },
+      "steps": [
+        {
+          "action": "publish",
+          "as": "child",
+          "type": "shift.assigned",
+          "subject_id": "s1",
+          "payload": { "date": "2026-01-05", "shift_type": "Cook Night" },
+          "expect": { "status": 403, "errorIncludes": "requires an adult" }
+        },
+        {
+          "action": "publish",
+          "as": "child",
+          "type": "shift.claimed",
+          "subject_id": "s1",
+          "payload": { "date": "2026-01-05", "shift_type": "Cook Night" },
+          "expect": { "status": 201 }
+        },
+        {
+          "action": "publish",
+          "as": "lead",
+          "type": "shift.assigned",
+          "subject_id": "s1",
+          "payload": { "date": "2026-01-05", "shift_type": "Cook Night" },
+          "expect": { "status": 201 }
+        }
+      ]
+    }
+  ]
+}
