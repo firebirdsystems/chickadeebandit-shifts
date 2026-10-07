@@ -178,7 +178,7 @@
   <div class="app">
     <header id="header">
       <div>
-        <h1>📅 Shift Scheduler</h1>
+        <h1><span id="page-glyph"></span> Shift Scheduler</h1>
         <div class="subtitle" id="header-subtitle">Loading…</div>
       </div>
       <div class="actions" id="header-actions"></div>
@@ -194,12 +194,15 @@
   </div>
 
   <script type="module">
-    import { esc, memberColor, initial, hubConfirm, createDbHelper, logHubActivity } from "/hub-sdk.js";
+    import { esc, glyph, chickadee, memberColor, initial, hubConfirm, createDbHelper, logHubActivity } from "/hub-sdk.js";
     import {
       isAdult, canManage, addDays, isoWeekStart, daysInRange,
       weekdayLabel, monthDayLabel, relativeDay, generateRotation,
       groupByDate, toISODate, claimsFor, openSpots, hasClaim, chunkIds,
     } from "./logic.js";
+
+    // The heading is static markup, so its glyph is filled in from script.
+    document.getElementById("page-glyph").innerHTML = glyph("calendar");
 
     const CONTEXT      = window.__CONTEXT_URL   ?? "";
     const DB           = window.__DB_URL        ?? "";
@@ -809,7 +812,7 @@
         return `<div class="member-opt" style="cursor:default">
           <div class="avatar" style="background:${memberColor(c.member_id)}">${initial(m?.name ?? "?")}</div>
           <span>${esc(m?.name ?? "Unknown")}</span>
-          ${leader ? `<button class="btn-icon" style="margin-left:auto" data-unassign="${c.member_id}" title="Unassign">✕</button>` : ""}
+          ${leader ? `<button class="btn-icon" style="margin-left:auto" data-unassign="${c.member_id}" title="Unassign" aria-label="Unassign">${glyph("close")}</button>` : ""}
         </div>`;
       }).join("") || `<div class="modal-sub" style="margin:0">Nobody yet — this shift is open.</div>`;
 
@@ -1105,7 +1108,7 @@
       if (shiftTypes.length === 0) {
         return `
           <div class="empty-state">
-            <div class="icon">📅</div>
+            <div class="icon">${chickadee("nest", { size: 72 })}</div>
             <p>No duties set up yet.</p>
             ${leader ? `<p style="margin-top:6px;font-size:0.85rem;">Tap "+ Duty" above to create your first recurring duty.</p>` : ""}
           </div>
@@ -1125,7 +1128,7 @@
         html += `<div class="grid-cell type-cell">
           <span class="type-swatch" style="background:${t.color}"></span>
           <span>${esc(t.emoji)} ${esc(t.name)}</span>
-          ${leader ? `<span class="type-actions"><button class="btn-icon" data-edit-type="${t.id}" title="Edit">✏️</button></span>` : ""}
+          ${leader ? `<span class="type-actions"><button class="btn-icon" data-edit-type="${t.id}" title="Edit" aria-label="Edit">${glyph("pencil")}</button></span>` : ""}
         </div>`;
 
         for (const d of days) {
@@ -1180,10 +1183,10 @@
 
     function renderMyShifts(myShifts) {
       if (!ME) {
-        return `<div class="empty-state"><div class="icon">👤</div><p>Sign in to see your shifts.</p></div>`;
+        return `<div class="empty-state"><div class="icon">${chickadee("perched", { size: 72 })}</div><p>Sign in to see your shifts.</p></div>`;
       }
       if (myShifts.length === 0) {
-        return `<div class="empty-state"><div class="icon">✅</div><p>No upcoming shifts assigned to you.</p></div>`;
+        return `<div class="empty-state"><div class="icon">${chickadee("sleeping", { size: 72 })}</div><p>No upcoming shifts assigned to you.</p></div>`;
       }
       return myShifts.map(s => {
         const t = shiftTypes.find(t => t.id === s.shift_type_id);
