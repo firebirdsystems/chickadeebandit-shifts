@@ -194,7 +194,7 @@
   </div>
 
   <script type="module">
-    import { esc, glyph, chickadee, memberColor, initial, hubConfirm, createDbHelper, logHubActivity } from "/hub-sdk.js";
+    import { esc, glyph, chickadee, memberColor, initial, hubConfirm, createDbHelper, logHubActivity, hubToday } from "/hub-sdk.js";
     import {
       isAdult, canManage, addDays, isoWeekStart, daysInRange,
       weekdayLabel, monthDayLabel, relativeDay, generateRotation,
@@ -236,7 +236,9 @@
     let claims = []; // shift_claims rows for the visible week's shifts
     const weekCache = new Map(); // start -> { shifts, claims }
 
-    const todayIso = toISODate(new Date());
+    // The household's date, not this device's: it is what the hub binds to
+    // `:today` when it reads this week's shifts into the document.
+    const todayIso = hubToday();
     let weekStart = isoWeekStart(todayIso);
     let view = null; // set after members load
     let modalEl = null;
@@ -290,7 +292,24 @@
       return out;
     }
 
-    async function loadShiftsForWeek(start) {
+    // One week's shifts and their claims, as two reads that do not wait on each
+    // other. Both name the week by ANY day in it and let SQLite find its Monday
+    // (`date(?, '-6 days', 'weekday 1')`), so the first load can pass today's
+    // date exactly as manifest.preload does — `:today` is the only date the hub
+    // can bind — and be answered from the document. The claims read joins to
+    // the week's shifts instead of listing their ids, so it needs neither the
+    // shifts' answer nor slicing under D1's 100-parameter ceiling.
+    const WEEK_SHIFTS_SQL = "SELECT id, shift_type_id, date, capacity, note FROM app_shifts__shifts WHERE date >= date(?, '-6 days', 'weekday 1') AND date <= date(?, '-6 days', 'weekday 1', '+6 days') ORDER BY date ASC";
+    const WEEK_CLAIMS_SQL = "SELECT c.id, c.shift_id, c.member_id FROM app_shifts__shift_claims c JOIN app_shifts__shifts s ON s.id = c.shift_id WHERE s.date >= date(?, '-6 days', 'weekday 1') AND s.date <= date(?, '-6 days', 'weekday 1', '+6 days')";
+    async function readWeek(dayInWeek) {
+      const [weekShifts, weekClaims] = await Promise.all([
+        db(WEEK_SHIFTS_SQL, [dayInWeek, dayInWeek]),
+        db(WEEK_CLAIMS_SQL, [dayInWeek, dayInWeek]),
+      ]);
+      return { shifts: weekShifts.rows ?? [], claims: weekClaims.rows ?? [] };
+    }
+
+    async function loadShiftsForWeek(start, dayInWeek = start) {
       if (weekCache.has(start)) {
         ({ shifts, claims } = weekCache.get(start));
         return;
@@ -303,12 +322,7 @@
         weekCache.set(start, demo);
         return;
       }
-      const { rows } = await db(
-        `SELECT id, shift_type_id, date, capacity, note FROM app_shifts__shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
-        [start, end]
-      );
-      shifts = rows ?? [];
-      claims = await loadClaimsFor(shifts.map(s => s.id));
+      ({ shifts, claims } = await readWeek(dayInWeek));
       weekCache.set(start, { shifts, claims });
     }
 
@@ -317,14 +331,8 @@
       if (!DB) return;
       for (const w of [addDays(start, -7), addDays(start, 7)]) {
         if (weekCache.has(w)) continue;
-        const end = addDays(w, 6);
-        db(
-          `SELECT id, shift_type_id, date, capacity, note FROM app_shifts__shifts WHERE date >= ? AND date <= ? ORDER BY date ASC`,
-          [w, end]
-        ).then(async ({ rows }) => {
-          const weekShifts = rows ?? [];
-          const weekClaims = await loadClaimsFor(weekShifts.map(s => s.id));
-          if (!weekCache.has(w)) weekCache.set(w, { shifts: weekShifts, claims: weekClaims });
+        readWeek(w).then((week) => {
+          if (!weekCache.has(w)) weekCache.set(w, week);
         }).catch(() => {});
       }
     }
@@ -1219,7 +1227,7 @@
 
     (async () => {
       await Promise.all([loadMembers(), loadShiftTypes()]);
-      await loadShiftsForWeek(weekStart);
+      await loadShiftsForWeek(weekStart, todayIso);
       // Everyone starts on the week grid now that members can claim open shifts.
       view = "week";
       await render();

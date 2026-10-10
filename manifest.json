@@ -18,7 +18,15 @@
   },
   "storage": "db",
   "preload": {
-    "shift_types": {"sql": "SELECT id, name, emoji, color, sort_order FROM app_shifts__shift_types ORDER BY sort_order ASC, created_at ASC"}
+    "shift_types": {"sql": "SELECT id, name, emoji, color, sort_order FROM app_shifts__shift_types ORDER BY sort_order ASC, created_at ASC"},
+    "week_shifts": {
+      "sql": "SELECT id, shift_type_id, date, capacity, note FROM app_shifts__shifts WHERE date >= date(?, '-6 days', 'weekday 1') AND date <= date(?, '-6 days', 'weekday 1', '+6 days') ORDER BY date ASC",
+      "params": [":today", ":today"]
+    },
+    "week_claims": {
+      "sql": "SELECT c.id, c.shift_id, c.member_id FROM app_shifts__shift_claims c JOIN app_shifts__shifts s ON s.id = c.shift_id WHERE s.date >= date(?, '-6 days', 'weekday 1') AND s.date <= date(?, '-6 days', 'weekday 1', '+6 days')",
+      "params": [":today", ":today"]
+    }
   },
   "db_plaintext_columns": ["capacity", "date", "color"],
   "member_references": {
