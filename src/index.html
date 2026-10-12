@@ -166,6 +166,9 @@
 
     #status { margin-top: 12px; font-size: 0.85rem; color: var(--muted); text-align: center; }
 
+    .load-error { margin: 0 0 12px; padding: 10px 14px; border-radius: 10px; background: var(--hub-tint-danger, #fee2e2); color: var(--hub-tint-danger-fg, #b91c1c); font-size: 0.9rem; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+    .load-error-retry { background: none; border: 1px solid currentColor; border-radius: 8px; padding: 5px 10px; font: inherit; font-weight: 600; color: inherit; cursor: pointer; flex-shrink: 0; }
+
     @media (max-width: 480px) {
       header { padding: 14px 16px; }
       .toolbar { flex-direction: column; align-items: stretch; }
@@ -255,10 +258,10 @@
         memberMap = new Map(members.map(m => [m.id, m]));
         return;
       }
-      try {
-        const res = await fetch(`${CONTEXT}?keys=family.members`);
-        members = ((await res.json())["family.members"]) ?? [];
-      } catch { members = []; }
+      const res = await fetch(`${CONTEXT}?keys=family.members`);
+      const ctx = await res.json().catch(() => null);
+      if (!res.ok || !ctx || typeof ctx !== "object" || ctx.$errors?.length) throw new Error("Couldn’t reach the hub. Try again.");
+      members = ctx["family.members"] ?? [];
       memberMap = new Map(members.map(m => [m.id, m]));
     }
 
@@ -725,7 +728,10 @@
       });
 
       window.__closeModal = closeModal;
-      window.__deleteShiftType = (id) => deleteShiftType(id);
+      window.__deleteShiftType = async (id) => {
+        try { await deleteShiftType(id); }
+        catch (e) { document.getElementById("status").textContent = `Error: ${e.message}`; }
+      };
       window.__saveShiftType = async (id) => {
         const nameVal = document.getElementById("f-name").value.trim();
         if (!nameVal) { document.getElementById("f-name").focus(); return; }
@@ -857,7 +863,10 @@
       `);
 
       window.__closeModal = closeModal;
-      document.getElementById("f-delete")?.addEventListener("click", () => deleteShift(shift));
+      document.getElementById("f-delete")?.addEventListener("click", async () => {
+        try { await deleteShift(shift); }
+        catch (err) { document.getElementById("status").textContent = `Error: ${err.message}`; }
+      });
       document.getElementById("f-claim")?.addEventListener("click", async (e) => {
         e.target.disabled = true;
         try { await claimShift(shift); }
@@ -1065,8 +1074,14 @@
       `;
       tabs.querySelectorAll(".tab").forEach(el => {
         el.addEventListener("click", async () => {
+          const previous = view;
           view = el.dataset.view;
-          await renderContent();
+          try { await renderContent(); }
+          catch (e) {
+            view = previous;
+            document.getElementById("status").textContent = `Error: ${e.message}`;
+            return;
+          }
           renderTabs();
           renderWeekNav();
         });
@@ -1090,8 +1105,14 @@
     }
 
     async function changeWeek(deltaDays, jumpToToday = false) {
+      const previous = weekStart;
       weekStart = jumpToToday ? isoWeekStart(todayIso) : addDays(weekStart, deltaDays);
-      await loadShiftsForWeek(weekStart);
+      try { await loadShiftsForWeek(weekStart); }
+      catch (e) {
+        weekStart = previous;
+        document.getElementById("status").textContent = `Error: ${e.message}`;
+        return;
+      }
       renderWeekNav();
       await renderContent();
       prefetchAdjacentWeeks(weekStart);
@@ -1216,8 +1237,19 @@
       }).join("");
     }
 
+    // True from a failed first load until a load succeeds. While it is, the
+    // page shows the banner alone: no grid, no tabs, no duty controls.
+    let loadFailed = false;
+
     async function render() {
       renderHeader();
+      if (loadFailed) {
+        document.getElementById("header-actions").innerHTML = "";
+        document.getElementById("view-tabs").innerHTML = "";
+        document.getElementById("week-nav").innerHTML = "";
+        document.getElementById("content").innerHTML = `<div class="load-error" data-testid="load-error" role="alert"><span>Couldn’t load the shifts.</span> <button type="button" class="load-error-retry" data-testid="load-retry">Try again</button></div>`;
+        return;
+      }
       renderTabs();
       renderWeekNav();
       await renderContent();
@@ -1225,14 +1257,21 @@
 
     // ── Init ─────────────────────────────────────────────────────────────────
 
-    (async () => {
-      await Promise.all([loadMembers(), loadShiftTypes()]);
-      await loadShiftsForWeek(weekStart, todayIso);
+    async function firstLoad() {
+      try {
+        await Promise.all([loadMembers(), loadShiftTypes()]);
+        await loadShiftsForWeek(weekStart, todayIso);
+        loadFailed = false;
+      } catch { loadFailed = true; }
       // Everyone starts on the week grid now that members can claim open shifts.
       view = "week";
       await render();
-      prefetchAdjacentWeeks(weekStart);
-    })();
+      if (!loadFailed) prefetchAdjacentWeeks(weekStart);
+    }
+    document.addEventListener("click", (e) => {
+      if (e.target.closest('[data-testid="load-retry"]')) firstLoad();
+    });
+    firstLoad();
   </script>
 </body>
 </html>
