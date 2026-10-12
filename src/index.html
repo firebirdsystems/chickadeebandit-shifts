@@ -229,6 +229,12 @@
       return json;
     }
 
+    // A failed action is said in the app's own line; the hub's text goes to the console.
+    function sayFailed(e, line) {
+      console.error(e);
+      document.getElementById("status").textContent = line;
+    }
+
     const PALETTE = ["#6366f1", "#0891b2", "#059669", "#d97706", "#dc2626", "#7c3aed", "#db2777", "#65a30d"];
     const EMOJIS = ["🍳", "🧹", "🛡️", "📋", "🚪", "🗑️", "🧺", "🌱", "🔧", "📞", "🔄"];
 
@@ -631,12 +637,17 @@
 
       // Assign each rotation member through the hub endpoint (claims are endpoint-only).
       const newClaims = [];
+      let unassigned = 0;
       if (ASSIGN_URL) {
         await Promise.all(created.filter(c => c.member_id).map(async c => {
           try {
             const res = await postJson(ASSIGN_URL, { slot_id: c.id, member_id: c.member_id });
             newClaims.push({ id: res.claim_id, shift_id: c.id, member_id: c.member_id });
-          } catch { /* leave the shift open if a single assign fails */ }
+          } catch (e) {
+            // The shift stays, open; the count is said once the schedule is drawn.
+            console.error(e);
+            unassigned++;
+          }
         }));
       } else {
         for (const c of created) {
@@ -654,6 +665,10 @@
 
       closeModal();
       render();
+      if (unassigned) {
+        document.getElementById("status").textContent =
+          `The shifts were scheduled, but ${unassigned} of ${created.length} couldn’t be assigned — ${unassigned === 1 ? "it is" : "they are"} open.`;
+      }
       prefetchAdjacentWeeks(weekStart);
 
       notify("New rotation scheduled", `${created.length} shifts have been scheduled.`);
@@ -730,7 +745,7 @@
       window.__closeModal = closeModal;
       window.__deleteShiftType = async (id) => {
         try { await deleteShiftType(id); }
-        catch (e) { document.getElementById("status").textContent = `Error: ${e.message}`; }
+        catch (e) { sayFailed(e, "Couldn’t delete the duty — try again."); }
       };
       window.__saveShiftType = async (id) => {
         const nameVal = document.getElementById("f-name").value.trim();
@@ -746,7 +761,7 @@
           else await createShiftType({ name: nameVal, emoji: emojiVal, color: colorVal });
         } catch (e) {
           if (btn) { btn.disabled = false; btn.textContent = id ? "Save" : "Create"; }
-          document.getElementById("status").textContent = `Error: ${e.message}`;
+          sayFailed(e, "Couldn’t save the duty — try again.");
         }
       };
     }
@@ -810,7 +825,7 @@
           render();
         } catch (e) {
           btn.disabled = false; btn.textContent = "Create";
-          document.getElementById("status").textContent = `Error: ${e.message}`;
+          sayFailed(e, "Couldn’t create the shift — try again.");
         }
       });
     }
@@ -865,14 +880,14 @@
       window.__closeModal = closeModal;
       document.getElementById("f-delete")?.addEventListener("click", async () => {
         try { await deleteShift(shift); }
-        catch (err) { document.getElementById("status").textContent = `Error: ${err.message}`; }
+        catch (err) { sayFailed(err, "Couldn’t remove the shift — try again."); }
       });
       document.getElementById("f-claim")?.addEventListener("click", async (e) => {
         e.target.disabled = true;
         try { await claimShift(shift); }
         catch (err) {
           e.target.disabled = false;
-          document.getElementById("status").textContent = `Error: ${err.message}`;
+          sayFailed(err, "Couldn’t claim the shift — try again.");
         }
       });
       document.getElementById("f-release")?.addEventListener("click", async (e) => {
@@ -880,7 +895,7 @@
         try { await releaseShift(shift); }
         catch (err) {
           e.target.disabled = false;
-          document.getElementById("status").textContent = `Error: ${err.message}`;
+          sayFailed(err, "Couldn’t release the shift — try again.");
         }
       });
       modalEl.querySelectorAll("[data-assign]").forEach(el => {
@@ -889,7 +904,7 @@
             await assignMember(shift, el.dataset.assign);
             renderShiftDetailModal(shift, type);
           } catch (err) {
-            document.getElementById("status").textContent = `Error: ${err.message}`;
+            sayFailed(err, "Couldn’t assign the shift — try again.");
           }
         });
       });
@@ -899,7 +914,7 @@
             await unassignMember(shift, el.dataset.unassign);
             renderShiftDetailModal(shift, type);
           } catch (err) {
-            document.getElementById("status").textContent = `Error: ${err.message}`;
+            sayFailed(err, "Couldn’t unassign the shift — try again.");
           }
         });
       });
@@ -1034,7 +1049,7 @@
           await bulkCreateShifts(rotation, typeId);
         } catch (e) {
           btn.disabled = false; btn.textContent = "Schedule";
-          document.getElementById("status").textContent = `Error: ${e.message}`;
+          sayFailed(e, "Couldn’t schedule the shifts — try again.");
         }
       });
     }
@@ -1079,7 +1094,7 @@
           try { await renderContent(); }
           catch (e) {
             view = previous;
-            document.getElementById("status").textContent = `Error: ${e.message}`;
+            sayFailed(e, "Couldn’t load the shifts.");
             return;
           }
           renderTabs();
@@ -1110,7 +1125,7 @@
       try { await loadShiftsForWeek(weekStart); }
       catch (e) {
         weekStart = previous;
-        document.getElementById("status").textContent = `Error: ${e.message}`;
+        sayFailed(e, "Couldn’t load that week.");
         return;
       }
       renderWeekNav();
