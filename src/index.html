@@ -284,23 +284,6 @@
       shiftTypes = rows ?? [];
     }
 
-    // Sliced: D1 rejects a statement with more than 100 bound parameters, and
-    // this is called with every shift of a duty — deleting a duty with ~90+
-    // scheduled shifts threw here before the button ever reached the delete.
-    async function loadClaimsFor(shiftIds) {
-      if (!shiftIds.length) return [];
-      const out = [];
-      for (const chunk of chunkIds(shiftIds)) {
-        const placeholders = chunk.map(() => "?").join(", ");
-        const { rows } = await db(
-          `SELECT id, shift_id, member_id FROM app_shifts__shift_claims WHERE shift_id IN (${placeholders})`,
-          chunk
-        );
-        out.push(...(rows ?? []));
-      }
-      return out;
-    }
-
     // One week's shifts and their claims, as two reads that do not wait on each
     // other. Both name the week by ANY day in it and let SQLite find its Monday
     // (`date(?, '-6 days', 'weekday 1')`), so the first load can pass today's
@@ -483,25 +466,22 @@
       });
       if (!ok) return;
 
-      if (DB) {
-        // Claims are endpoint-written, so release them best-effort before dropping the rows.
-        if (UNASSIGN_URL) {
-          const { rows: typeShifts } = await db(`SELECT id FROM app_shifts__shifts WHERE shift_type_id = ?`, [id]);
-          const ids = (typeShifts ?? []).map(s => s.id);
-          const typeClaims = await loadClaimsFor(ids);
-          await Promise.all(typeClaims.map(c =>
-            postJson(UNASSIGN_URL, { slot_id: c.shift_id, member_id: c.member_id }).catch(() => {})
-          ));
-        }
-        await db(`DELETE FROM app_shifts__shifts WHERE shift_type_id = ?`, [id]);
-        await db(`DELETE FROM app_shifts__shift_types WHERE id = ?`, [id]);
-      }
-      shiftTypes = shiftTypes.filter(t => t.id !== id);
+      // The hub removes a shift's claims with the shift (manifest.delete_cascades),
+      // in the same transaction, so nobody is unassigned unless the shifts go.
+      if (DB) await db(`DELETE FROM app_shifts__shifts WHERE shift_type_id = ?`, [id]);
       shifts = shifts.filter(s => s.shift_type_id !== id);
       claims = claims.filter(c => shifts.some(s => s.id === c.shift_id));
       weekCache.clear();
       weekCache.set(weekStart, { shifts, claims });
       invalidateMyShiftsCache();
+      // The duty's own row is a second request (a cascading DELETE cannot join
+      // a batch). If it fails the shifts are already gone: draw that, and the
+      // retry only has the duty left to remove.
+      if (DB) {
+        try { await db(`DELETE FROM app_shifts__shift_types WHERE id = ?`, [id]); }
+        catch (e) { render(); throw e; }
+      }
+      shiftTypes = shiftTypes.filter(t => t.id !== id);
       closeModal();
       render();
       prefetchAdjacentWeeks(weekStart);
@@ -598,13 +578,8 @@
       });
       if (!ok) return;
 
-      // Claims are endpoint-written, so clear them through unassign before dropping the row.
-      const holders = claimsFor(claims, shift.id).map(c => c.member_id);
-      if (UNASSIGN_URL) {
-        await Promise.all(holders.map(memberId =>
-          postJson(UNASSIGN_URL, { slot_id: shift.id, member_id: memberId }).catch(() => {})
-        ));
-      }
+      // The hub removes the shift's claims with it (manifest.delete_cascades), in
+      // the same transaction: a failed delete leaves its holders assigned.
       if (DB) await db(`DELETE FROM app_shifts__shifts WHERE id = ?`, [shift.id]);
       shifts = shifts.filter(s => s.id !== shift.id);
       claims = claims.filter(c => c.shift_id !== shift.id);
@@ -820,14 +795,17 @@
         btn.disabled = true; btn.textContent = "Creating…";
         try {
           const shift = await createShift(shiftTypeId, date, capacity);
+          let assignFailed = null;
           if (selectedMember) {
             // The shift is saved by now: a failed assignment leaves it open, and
             // the form closes so a second press cannot create it twice.
             try { await assignMember(shift, selectedMember); }
-            catch (e) { sayFailed(e, "The shift was created, but couldn’t be assigned — it is open."); }
+            catch (e) { assignFailed = e; }
           }
           closeModal();
           render();
+          // Said after the draw, which clears the status line.
+          if (assignFailed) sayFailed(assignFailed, "The shift was created, but couldn’t be assigned — it is open.");
         } catch (e) {
           btn.disabled = false; btn.textContent = "Create";
           sayFailed(e, "Couldn’t create the shift — try again.");
@@ -1140,6 +1118,9 @@
 
     async function renderContent() {
       const content = document.getElementById("content");
+      // A fresh draw follows an action that worked (or a move to another week
+      // or tab): the last failure's line no longer describes the screen.
+      document.getElementById("status").textContent = "";
       if (view === "week") {
         content.innerHTML = renderWeekGrid();
         attachWeekGridHandlers();
