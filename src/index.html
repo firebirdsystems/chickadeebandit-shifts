@@ -820,7 +820,12 @@
         btn.disabled = true; btn.textContent = "Creating…";
         try {
           const shift = await createShift(shiftTypeId, date, capacity);
-          if (selectedMember) await assignMember(shift, selectedMember);
+          if (selectedMember) {
+            // The shift is saved by now: a failed assignment leaves it open, and
+            // the form closes so a second press cannot create it twice.
+            try { await assignMember(shift, selectedMember); }
+            catch (e) { sayFailed(e, "The shift was created, but couldn’t be assigned — it is open."); }
+          }
           closeModal();
           render();
         } catch (e) {
