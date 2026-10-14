@@ -140,3 +140,42 @@ export function chunkIds(ids, size = MAX_BOUND_PARAMS) {
   for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
   return out;
 }
+
+// ── Failure lines ─────────────────────────────────────────────────────────────
+
+/** The line a failed write shows, from the error's status — never its text.
+ *  "Try again" only where trying again can work. `found` is the caller's
+ *  re-read after a write that changed nothing (true: the row is still there). */
+export function failureLine(e, { action, thing, found } = {}) {
+  if (e?.forUser) return e.message;
+  if (e?.code === "UNIQUE_CONSTRAINT" || /UNIQUE constraint failed/i.test(String(e?.message ?? ""))) return `That ${thing} already exists.`;
+  if (e?.status === 403) return `You don’t have permission to ${action}.`;
+  if (e?.status === 507) return "The household’s storage is full — free up space first.";
+  if (e?.status === 429) return "Too many tries — wait a minute and try again.";
+  if (found === false || (found === undefined && e?.status === 404)) return `This ${thing} has been removed.`;
+  if (found === true) return `You don’t have permission to ${action}.`;
+  if (e?.status === 409 || e?.status === 404) return `This ${thing} was changed by someone else — check it first.`;
+  return `Couldn’t ${action} — try again.`;
+}
+
+/** The slot-claims endpoints say why they refused: a 409 with `reason`
+ *  (`slot_full`, `already_claimed`), and a 404 from release/unassign when the
+ *  claim (or its shift, which takes the claim with it) is gone.
+ *  `kind` is "claim", "release", "assign" or "unassign". The assign
+ *  endpoint's 404 is either the shift or the member gone: `listed` is the
+ *  caller's re-read (true: the shift is still there; undefined: the read failed). */
+export function shiftClaimLine(e, kind, listed) {
+  const reason = e?.reason ?? e?.code;
+  if (e?.status === 409 && reason === "slot_full" && (kind === "claim" || kind === "assign")) return "That shift was just filled.";
+  if (e?.status === 409 && reason === "already_claimed") {
+    if (kind === "claim") return "You’re already on this shift.";
+    if (kind === "assign") return "They’re already on this shift.";
+  }
+  if (e?.status === 404 && kind === "release") return "You’re no longer on this shift.";
+  if (e?.status === 404 && kind === "unassign") return "They’re no longer on this shift.";
+  if (e?.status === 404 && kind === "assign") {
+    if (listed === true) return "That person is no longer in the household.";
+    if (listed === undefined) return "Couldn’t assign the shift — try again.";
+  }
+  return failureLine(e, { action: `${kind} the shift`, thing: "shift" });
+}

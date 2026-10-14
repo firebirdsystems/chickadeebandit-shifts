@@ -202,6 +202,7 @@
       isAdult, canManage, addDays, isoWeekStart, daysInRange,
       weekdayLabel, monthDayLabel, relativeDay, generateRotation,
       groupByDate, toISODate, claimsFor, openSpots, hasClaim, chunkIds,
+      failureLine, shiftClaimLine,
     } from "./logic.js";
 
     // The heading is static markup, so its glyph is filled in from script.
@@ -225,7 +226,9 @@
         body: JSON.stringify(body),
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error ?? "Request failed");
+      // The status (and the `reason`/`code` the endpoint names) pick the line; the
+      // hub's text stays in the console.
+      if (!res.ok) throw Object.assign(new Error(json.error ?? "Request failed"), { status: res.status, code: json.code, reason: json.reason });
       return json;
     }
 
@@ -454,8 +457,8 @@
         // duty was removed elsewhere, or the write was narrowed away): draw
         // what is stored and let the caller say it failed, form left as typed.
         if (res?.changed === 0) {
-          await loadShiftTypes().then(render).catch(() => {});
-          throw new Error("Duty update changed no rows");
+          const found = await loadShiftTypes().then(() => { render(); return shiftTypes.some(t => t.id === id); }).catch(() => undefined);
+          throw Object.assign(new Error("Duty update changed no rows"), { found });
         }
       }
       const idx = shiftTypes.findIndex(t => t.id === id);
@@ -557,6 +560,32 @@
       localRemoveClaim(shift.id, memberId);
       render();
       logActivity(shift.id, "unassigned", `${memberMap.get(memberId)?.name ?? "Someone"} unassigned`).catch(() => {});
+    }
+
+    // A 404 or 409 from the claims endpoints means the week on screen is out of
+    // date: read it again and redraw so the stale button goes. Answers whether
+    // the shift is still listed (undefined when the read failed).
+    async function reloadWeekAfterRefusal(shift, type) {
+      const shownModal = modalEl;
+      weekCache.delete(weekStart);
+      try {
+        await loadShiftsForWeek(weekStart);
+        invalidateMyShiftsCache();
+        await renderContent();
+      } catch (e) { console.error(e); return undefined; }
+      const fresh = shifts.find(s => s.id === shift.id);
+      if (modalEl && modalEl === shownModal) {
+        if (fresh) renderShiftDetailModal(fresh, type); else closeModal();
+      }
+      return !!fresh;
+    }
+
+    // The line for a refused claim action, after re-reading the week when the
+    // refusal says it is stale.
+    async function claimRefusedLine(err, kind, shift, type) {
+      const stale = err?.status === 404 || err?.status === 409;
+      const listed = stale ? await reloadWeekAfterRefusal(shift, type) : undefined;
+      return shiftClaimLine(err, kind, listed);
     }
 
     // Create a shift row for a (date, shiftTypeId) cell. Leadership only.
@@ -727,7 +756,7 @@
       window.__closeModal = closeModal;
       window.__deleteShiftType = async (id) => {
         try { await deleteShiftType(id); }
-        catch (e) { sayFailed(e, "Couldn’t delete the duty — try again."); }
+        catch (e) { sayFailed(e, failureLine(e, { action: "delete the duty", thing: "duty" })); }
       };
       window.__saveShiftType = async (id) => {
         const nameVal = document.getElementById("f-name").value.trim();
@@ -743,7 +772,7 @@
           else await createShiftType({ name: nameVal, emoji: emojiVal, color: colorVal });
         } catch (e) {
           if (btn) { btn.disabled = false; btn.textContent = id ? "Save" : "Create"; }
-          sayFailed(e, "Couldn’t save the duty — try again.");
+          sayFailed(e, failureLine(e, { action: "save the duty", thing: "duty", found: e?.found }));
         }
       };
     }
@@ -815,7 +844,7 @@
           if (assignFailed) sayFailed(assignFailed, "The shift was created, but couldn’t be assigned — it is open.");
         } catch (e) {
           btn.disabled = false; btn.textContent = "Create";
-          sayFailed(e, "Couldn’t create the shift — try again.");
+          sayFailed(e, failureLine(e, { action: "create the shift", thing: "shift" }));
         }
       });
     }
@@ -870,14 +899,14 @@
       window.__closeModal = closeModal;
       document.getElementById("f-delete")?.addEventListener("click", async () => {
         try { await deleteShift(shift); }
-        catch (err) { sayFailed(err, "Couldn’t remove the shift — try again."); }
+        catch (err) { sayFailed(err, failureLine(err, { action: "remove the shift", thing: "shift" })); }
       });
       document.getElementById("f-claim")?.addEventListener("click", async (e) => {
         e.target.disabled = true;
         try { await claimShift(shift); }
         catch (err) {
           e.target.disabled = false;
-          sayFailed(err, "Couldn’t claim the shift — try again.");
+          sayFailed(err, await claimRefusedLine(err, "claim", shift, type));
         }
       });
       document.getElementById("f-release")?.addEventListener("click", async (e) => {
@@ -885,7 +914,7 @@
         try { await releaseShift(shift); }
         catch (err) {
           e.target.disabled = false;
-          sayFailed(err, "Couldn’t release the shift — try again.");
+          sayFailed(err, await claimRefusedLine(err, "release", shift, type));
         }
       });
       modalEl.querySelectorAll("[data-assign]").forEach(el => {
@@ -894,7 +923,7 @@
             await assignMember(shift, el.dataset.assign);
             renderShiftDetailModal(shift, type);
           } catch (err) {
-            sayFailed(err, "Couldn’t assign the shift — try again.");
+            sayFailed(err, await claimRefusedLine(err, "assign", shift, type));
           }
         });
       });
@@ -904,7 +933,7 @@
             await unassignMember(shift, el.dataset.unassign);
             renderShiftDetailModal(shift, type);
           } catch (err) {
-            sayFailed(err, "Couldn’t unassign the shift — try again.");
+            sayFailed(err, await claimRefusedLine(err, "unassign", shift, type));
           }
         });
       });
@@ -1039,7 +1068,7 @@
           await bulkCreateShifts(rotation, typeId);
         } catch (e) {
           btn.disabled = false; btn.textContent = "Schedule";
-          sayFailed(e, "Couldn’t schedule the shifts — try again.");
+          sayFailed(e, failureLine(e, { action: "schedule the shifts", thing: "shift" }));
         }
       });
     }
