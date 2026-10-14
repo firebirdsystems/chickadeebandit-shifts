@@ -202,7 +202,8 @@
       isAdult, canManage, addDays, isoWeekStart, daysInRange,
       weekdayLabel, monthDayLabel, relativeDay, generateRotation,
       groupByDate, toISODate, claimsFor, openSpots, hasClaim, chunkIds,
-      failureLine, shiftClaimLine,
+      failureLine, shiftClaimLine, outcomeUnknown, SAVED_AS_FIRST,
+      rotationInsertStatements, MAX_ROTATION_DAYS,
     } from "./logic.js";
 
     // The heading is static markup, so its glyph is filled in from script.
@@ -488,7 +489,16 @@
       // a batch). If it fails the shifts are already gone: draw that, and the
       // retry only has the duty left to remove.
       if (DB) {
-        try { await db(`DELETE FROM app_shifts__shift_types WHERE id = ?`, [id]); }
+        try {
+          const res = await db(`DELETE FROM app_shifts__shift_types WHERE id = ?`, [id]);
+          // Nothing removed: already gone (drawn gone below), or narrowed away
+          // from this member (still there: the permission line).
+          if (res?.changed === 0) {
+            const found = await db(`SELECT id FROM app_shifts__shift_types WHERE id = ?`, [id])
+              .then(r => (r.rows?.length ?? 0) > 0).catch(() => undefined);
+            if (found !== false) throw Object.assign(new Error("Duty delete changed no rows"), { found });
+          }
+        }
         catch (e) { render(); throw e; }
       }
       shiftTypes = shiftTypes.filter(t => t.id !== id);
@@ -616,7 +626,15 @@
 
       // The hub removes the shift's claims with it (manifest.delete_cascades), in
       // the same transaction: a failed delete leaves its holders assigned.
-      if (DB) await db(`DELETE FROM app_shifts__shifts WHERE id = ?`, [shift.id]);
+      if (DB) {
+        const res = await db(`DELETE FROM app_shifts__shifts WHERE id = ?`, [shift.id]);
+        // Nothing removed: already gone (drawn gone below), or narrowed away
+        // from this member (still there: the permission line).
+        if (res?.changed === 0) {
+          const found = await shiftStored(shift.id).catch(() => undefined);
+          if (found !== false) throw Object.assign(new Error("Shift delete changed no rows"), { found });
+        }
+      }
       shifts = shifts.filter(s => s.id !== shift.id);
       claims = claims.filter(c => c.shift_id !== shift.id);
       weekCache.set(weekStart, { shifts, claims });
@@ -626,25 +644,73 @@
       logActivity(shift.id, "deleted", "Shift removed").catch(() => {});
     }
 
-    async function bulkCreateShifts(rows, shiftTypeId) {
-      const now = new Date().toISOString();
-      const created = rows.map(r => ({
-        id: crypto.randomUUID(),
-        shift_type_id: shiftTypeId,
-        date: r.date,
-        capacity: 1,
-        note: "",
-        member_id: r.member_id,
-      }));
+    // Whether a shift row is stored under this id (the rotation's INSERTs are one
+    // atomic batch, so one of its rows answers for all of them).
+    async function shiftStored(id) {
+      return ((await db(`SELECT id FROM app_shifts__shifts WHERE id = ?`, [id])).rows?.length ?? 0) > 0;
+    }
 
-      if (DB && created.length > 0) {
-        const placeholders = created.map(() => "(?, ?, ?, 1, '', ?, ?)").join(", ");
-        const params = created.flatMap(c => [c.id, c.shift_type_id, c.date, now, now]);
-        await db(
-          `INSERT INTO app_shifts__shifts (id, shift_type_id, date, capacity, note, created_at, updated_at) VALUES ${placeholders}`,
-          params
-        );
+    async function bulkCreateShifts(rows, shiftTypeId, pinHost = null) {
+      const now = new Date().toISOString();
+      // Every row's id is the form's, minted on its first Schedule and sent on
+      // every retry: a try whose answer was lost may have stored the whole
+      // rotation, and a second press must find it rather than schedule (and
+      // assign) it twice. The pin remembers the rotation it was minted for.
+      const sig = JSON.stringify([shiftTypeId, rows.map(r => [r.date, r.member_id ?? null])]);
+      let pin = pinHost?.rotationPin ?? null;
+      let created = null;
+      let note = "";
+      if (pin && pin.sig !== sig && pin.created.length > 0) {
+        // Edited since a try whose answer was lost: find out whether that try
+        // landed. It did: the rotation stays as first entered, and that is said.
+        // It did not: the edited rotation is scheduled under new ids. The read
+        // failed: the usual failure line, the pin kept.
+        if (await shiftStored(pin.created[0].id)) { created = pin.created; note = SAVED_AS_FIRST; }
+        else pin = null;
       }
+      if (!created) {
+        if (!pin || pin.sig !== sig) {
+          pin = {
+            sig,
+            created: rows.map(r => ({
+              id: crypto.randomUUID(),
+              shift_type_id: shiftTypeId,
+              date: r.date,
+              capacity: 1,
+              note: "",
+              member_id: r.member_id,
+            })),
+          };
+          if (pinHost) pinHost.rotationPin = pin;
+        }
+        created = pin.created;
+
+        if (DB && created.length > 0) {
+          // Several INSERTs in one atomic batch: a statement takes at most 90
+          // bound values, and the rotation lands whole or not at all.
+          const statements = rotationInsertStatements(created, now);
+          if (!statements) throw Object.assign(new Error(`A rotation can cover up to ${MAX_ROTATION_DAYS} days.`), { forUser: true });
+          try {
+            await db.batch(statements);
+          } catch (e) {
+            // Unknown outcome: read back by a pinned id. Found means an earlier
+            // try landed and its success path (assigning, the push) never ran,
+            // so it runs now, once. Not found, or the read failed: the
+            // schedule fails, the ids stay pinned.
+            if (!outcomeUnknown(e)) throw e;
+            let landed = false;
+            try { landed = await shiftStored(created[0].id); } catch (readErr) {
+              // The id is ours: with the read-back failed, a UNIQUE answer may be this
+              // form's own first try, so nothing is known — "try again", not "already exists".
+              console.error(readErr);
+              throw new Error("create outcome unknown", { cause: e });
+            }
+            if (!landed) throw e;
+            console.error(e);
+          }
+        }
+      }
+      if (pinHost) delete pinHost.rotationPin;
 
       // Assign each rotation member through the hub endpoint (claims are endpoint-only).
       const newClaims = [];
@@ -674,12 +740,13 @@
       weekCache.set(weekStart, { shifts, claims });
       invalidateMyShiftsCache();
 
-      closeModal();
+      if (!pinHost || modalEl === pinHost) closeModal();
       render();
-      if (unassigned) {
-        document.getElementById("status").textContent =
-          `The shifts were scheduled, but ${unassigned} of ${created.length} couldn’t be assigned — ${unassigned === 1 ? "it is" : "they are"} open.`;
-      }
+      const said = [
+        note,
+        unassigned ? `The shifts were scheduled, but ${unassigned} of ${created.length} couldn’t be assigned — ${unassigned === 1 ? "it is" : "they are"} open.` : "",
+      ].filter(Boolean).join(" ");
+      if (said) document.getElementById("status").textContent = said;
       prefetchAdjacentWeeks(weekStart);
 
       notify("New rotation scheduled", `${created.length} shifts have been scheduled.`);
@@ -756,7 +823,7 @@
       window.__closeModal = closeModal;
       window.__deleteShiftType = async (id) => {
         try { await deleteShiftType(id); }
-        catch (e) { sayFailed(e, failureLine(e, { action: "delete the duty", thing: "duty" })); }
+        catch (e) { sayFailed(e, failureLine(e, { action: "delete the duty", thing: "duty", found: e?.found })); }
       };
       window.__saveShiftType = async (id) => {
         const nameVal = document.getElementById("f-name").value.trim();
@@ -899,7 +966,7 @@
       window.__closeModal = closeModal;
       document.getElementById("f-delete")?.addEventListener("click", async () => {
         try { await deleteShift(shift); }
-        catch (err) { sayFailed(err, failureLine(err, { action: "remove the shift", thing: "shift" })); }
+        catch (err) { sayFailed(err, failureLine(err, { action: "remove the shift", thing: "shift", found: err?.found })); }
       });
       document.getElementById("f-claim")?.addEventListener("click", async (e) => {
         e.target.disabled = true;
@@ -1027,6 +1094,9 @@
           .map(el => el.dataset.member);
       }
 
+      // Set while a Schedule is in flight: a preview redrawn meanwhile must not
+      // re-enable the button and send the pinned rotation a second time.
+      let scheduling = false;
       function updatePreview() {
         const startVal = document.getElementById("f-start").value;
         const endVal = document.getElementById("f-end").value;
@@ -1042,13 +1112,18 @@
         }
 
         const rotation = generateRotation(startVal, endVal, memberIds, styleVal);
+        if (rotation.length > MAX_ROTATION_DAYS) {
+          previewEl.innerHTML = `<div class="preview-row"><span>A rotation can cover up to ${MAX_ROTATION_DAYS} days — pick a shorter range.</span></div>`;
+          confirmBtn.disabled = true;
+          return;
+        }
         previewEl.innerHTML = rotation.map(r => `
           <div class="preview-row">
             <span>${weekdayLabel(r.date)} ${monthDayLabel(r.date)}</span>
             <span class="who">${esc(memberMap.get(r.member_id)?.name ?? "—")}</span>
           </div>
         `).join("");
-        confirmBtn.disabled = false;
+        confirmBtn.disabled = scheduling;
       }
 
       updatePreview();
@@ -1062,11 +1137,15 @@
         const memberIds = selectedMemberIds();
         const rotation = generateRotation(startVal, endVal, memberIds, styleVal);
 
+        if (scheduling) return;
+        const host = modalEl;
         const btn = document.getElementById("f-confirm");
         btn.disabled = true; btn.textContent = "Scheduling…";
+        scheduling = true;
         try {
-          await bulkCreateShifts(rotation, typeId);
+          await bulkCreateShifts(rotation, typeId, host);
         } catch (e) {
+          scheduling = false;
           btn.disabled = false; btn.textContent = "Schedule";
           sayFailed(e, failureLine(e, { action: "schedule the shifts", thing: "shift" }));
         }

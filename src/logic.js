@@ -141,6 +141,29 @@ export function chunkIds(ids, size = MAX_BOUND_PARAMS) {
   return out;
 }
 
+// ── Scheduling a rotation ────────────────────────────────────────────────────
+// A rotation's shifts go to the hub as ONE batch, so a failure part-way leaves
+// nothing behind and a retry cannot schedule half of it twice. A shift row binds
+// 5 values, so 18 rows share an INSERT (90 bound values); a batch takes 25
+// statements, so a rotation stops at a year and a day (21 INSERTs).
+export const ROTATION_ROWS_PER_INSERT = Math.floor(MAX_BOUND_PARAMS / 5);
+export const MAX_ROTATION_DAYS = 366;
+
+/** The statements that store `created` (rows with id, shift_type_id, date),
+ *  stamped `now`, or null when the rotation is longer than MAX_ROTATION_DAYS. */
+export function rotationInsertStatements(created, now) {
+  if (created.length > MAX_ROTATION_DAYS) return null;
+  const statements = [];
+  for (let i = 0; i < created.length; i += ROTATION_ROWS_PER_INSERT) {
+    const rows = created.slice(i, i + ROTATION_ROWS_PER_INSERT);
+    statements.push({
+      sql: `INSERT INTO app_shifts__shifts (id, shift_type_id, date, capacity, note, created_at, updated_at) VALUES ${rows.map(() => "(?, ?, ?, 1, '', ?, ?)").join(", ")}`,
+      params: rows.flatMap(c => [c.id, c.shift_type_id, c.date, now, now]),
+    });
+  }
+  return statements;
+}
+
 // ── Failure lines ─────────────────────────────────────────────────────────────
 
 /** The line a failed write shows, from the error's status — never its text.
@@ -179,3 +202,28 @@ export function shiftClaimLine(e, kind, listed) {
   }
   return failureLine(e, { action: `${kind} the shift`, thing: "shift" });
 }
+
+// ── Retry after a lost response (app-template guide) ─────────────────────────
+
+/**
+ * Whether a failed create's answer leaves its outcome unknown — no status, a
+ * 400, or a 5xx other than 507 — so the page reads the row back by its pinned
+ * id. A `UNIQUE_CONSTRAINT` answer is a 400 too: the usual retry of a create
+ * that landed collides on its own pinned id. Only finding the row under that
+ * id says it landed.
+ */
+export function outcomeUnknown(e) {
+  if (e?.code === "UNIQUE_CONSTRAINT" || /UNIQUE constraint failed/i.test(String(e?.message ?? ""))) return true;
+  const status = Number(e?.status) || 0;
+  return status === 0 || status === 400 || (status >= 500 && status !== 507);
+}
+
+/**
+ * Whether a stored row differs from what the form holds now, over the form's
+ * own fields only, compared as text with a missing value as empty.
+ */
+export function storedDiffers(row, fields) {
+  return Object.keys(fields).some((k) => String(row?.[k] ?? "") !== String(fields[k] ?? ""));
+}
+
+export const SAVED_AS_FIRST = "Saved as first entered — check it and update what changed.";
