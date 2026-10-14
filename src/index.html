@@ -449,7 +449,14 @@
 
     async function updateShiftType(id, fields) {
       if (DB) {
-        await db(`UPDATE app_shifts__shift_types SET name = ?, emoji = ?, color = ? WHERE id = ?`, [fields.name, fields.emoji, fields.color, id]);
+        const res = await db(`UPDATE app_shifts__shift_types SET name = ?, emoji = ?, color = ? WHERE id = ?`, [fields.name, fields.emoji, fields.color, id]);
+        // The hub answers 200 with `changed: 0` when nothing was stored (the
+        // duty was removed elsewhere, or the write was narrowed away): draw
+        // what is stored and let the caller say it failed, form left as typed.
+        if (res?.changed === 0) {
+          await loadShiftTypes().then(render).catch(() => {});
+          throw new Error("Duty update changed no rows");
+        }
       }
       const idx = shiftTypes.findIndex(t => t.id === id);
       if (idx !== -1) shiftTypes[idx] = { ...shiftTypes[idx], ...fields };
